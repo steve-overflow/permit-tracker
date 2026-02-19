@@ -8,7 +8,7 @@ that recreation.gov's website uses. No API key needed.
 import json
 import logging
 import ssl
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -83,12 +83,15 @@ def search_permits(query: str) -> list:
 
 def get_permit_info(permit_id: str) -> dict:
     """Get permit metadata including division names.
-    
+
     Tries the standard /permits/ endpoint first, then falls back to
     /permitcontent/ for newer permit types (wilderness permits, etc).
+
+    Returns dict with permit_type = "standard" or "itinerary".
     """
     divisions = {}
     name = "Unknown"
+    permit_type = "standard"
 
     # Try standard endpoint first
     try:
@@ -105,7 +108,7 @@ def get_permit_info(permit_id: str) -> dict:
     except Exception:
         pass
 
-    # Fall back to permitcontent endpoint for newer permits
+    # Fall back to permitcontent endpoint for newer permits (itinerary type)
     if not divisions:
         try:
             data = api_get(f"/permitcontent/{permit_id}")
@@ -117,6 +120,7 @@ def get_permit_info(permit_id: str) -> dict:
                     "type": div.get("type", "Unknown"),
                 }
             name = payload.get("name", name)
+            permit_type = "itinerary"
         except Exception:
             pass
 
@@ -124,12 +128,13 @@ def get_permit_info(permit_id: str) -> dict:
         "permit_id": permit_id,
         "name": name,
         "divisions": divisions,
+        "permit_type": permit_type,
     }
 
 
 def check_availability(permit_id: str, start_date: str, end_date: str) -> dict:
     """
-    Check permit availability for a date range.
+    Check permit availability using the standard API.
 
     Args:
         permit_id: Recreation.gov permit ID
@@ -147,6 +152,77 @@ def check_availability(permit_id: str, start_date: str, end_date: str) -> dict:
     return data.get("payload", {}).get("availability", {})
 
 
+def check_itinerary_availability(
+    permit_id: str, division_ids: list, start_date: str, end_date: str
+) -> dict:
+    """
+    Check availability using the itinerary API (per-division, per-month).
+
+    Args:
+        permit_id: Recreation.gov permit ID
+        division_ids: List of division IDs to query
+        start_date: ISO date string (YYYY-MM-DD)
+        end_date: ISO date string (YYYY-MM-DD)
+
+    Returns:
+        Same format as check_availability:
+        {division_id: {date_availability: {date: {remaining, total}}}}
+    """
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
+    # Build list of (year, month) pairs covering the range
+    months = []
+    cur = start_dt.replace(day=1)
+    while cur <= end_dt:
+        months.append((cur.year, cur.month))
+        # Advance to next month
+        if cur.month == 12:
+            cur = cur.replace(year=cur.year + 1, month=1)
+        else:
+            cur = cur.replace(month=cur.month + 1)
+
+    result = {}
+
+    for div_id in division_ids:
+        date_availability = {}
+        for year, month in months:
+            try:
+                data = api_get(
+                    f"/permititinerary/{permit_id}/division/{div_id}"
+                    f"/availability/month?month={month}&year={year}"
+                )
+                payload = data.get("payload", {})
+                quota_maps = payload.get("quota_type_maps", {})
+                daily = quota_maps.get("ConstantQuotaUsageDaily", {})
+
+                for date_str, info in daily.items():
+                    # Filter to requested date range
+                    try:
+                        dt = datetime.fromisoformat(
+                            date_str.replace("Z", "+00:00")
+                        )
+                        d = dt.strftime("%Y-%m-%d")
+                    except Exception:
+                        d = date_str[:10]
+
+                    if start_date <= d <= end_date:
+                        date_availability[date_str] = {
+                            "remaining": info.get("remaining", 0),
+                            "total": info.get("total", 0),
+                        }
+            except Exception as e:
+                log.warning(
+                    "Itinerary API failed for permit %s div %s %d/%d: %s",
+                    permit_id, div_id, month, year, e,
+                )
+
+        if date_availability:
+            result[div_id] = {"date_availability": date_availability}
+
+    return result
+
+
 def find_available_slots(
     permit_id: str,
     start_date: str,
@@ -159,15 +235,29 @@ def find_available_slots(
 
     Each dict has: permit_id, division_id, division_name, date, date_raw,
     remaining, total.
+
+    Automatically detects whether to use the standard or itinerary API.
     """
     try:
         info = get_permit_info(permit_id)
         div_names = {d["id"]: d["name"] for d in info["divisions"].values()}
+        permit_type = info.get("permit_type", "standard")
     except Exception:
         div_names = {}
+        permit_type = "standard"
 
     try:
-        availability = check_availability(permit_id, start_date, end_date)
+        if permit_type == "itinerary":
+            # Itinerary API requires explicit division list
+            query_divs = division_ids or list(div_names.keys())
+            if not query_divs:
+                log.warning("No divisions to query for itinerary permit %s", permit_id)
+                return []
+            availability = check_itinerary_availability(
+                permit_id, query_divs, start_date, end_date
+            )
+        else:
+            availability = check_availability(permit_id, start_date, end_date)
     except Exception as e:
         log.error("Failed to check availability for %s: %s", permit_id, e)
         return []
@@ -181,9 +271,9 @@ def find_available_slots(
         div_name = div_names.get(div_id, f"Division {div_id}")
         dates = div_data.get("date_availability", {})
 
-        for date_str, info in sorted(dates.items()):
-            remaining = info.get("remaining", 0)
-            total = info.get("total", 0)
+        for date_str, slot_info in sorted(dates.items()):
+            remaining = slot_info.get("remaining", 0)
+            total = slot_info.get("total", 0)
             if remaining >= min_available:
                 try:
                     dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))

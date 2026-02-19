@@ -188,6 +188,59 @@ def send_sms(phone: str, carrier: str, permit_name: str, slots: list) -> bool:
 # Dispatch — send all configured notifications for a tracker
 # ---------------------------------------------------------------------------
 
+def send_test_notification(notif_type: str, **kwargs) -> dict:
+    """
+    Send a single test notification.
+
+    Args:
+        notif_type: "email", "ntfy", or "sms"
+        kwargs: email=..., ntfy_topic=..., sms_phone=..., sms_carrier=...
+
+    Returns:
+        {"type": ..., "target": ..., "success": bool, "error": str|None}
+    """
+    test_permit = "Test Permit"
+    test_slots = [
+        {
+            "permit_id": "000000",
+            "division_id": "0",
+            "division_name": "Test Division",
+            "date": "Mon Jan 01, 2099",
+            "date_raw": "2099-01-01T00:00:00Z",
+            "remaining": 5,
+            "total": 10,
+        }
+    ]
+
+    try:
+        if notif_type == "email":
+            email = kwargs.get("email", "")
+            if not email:
+                return {"type": "email", "target": "", "success": False, "error": "No email provided"}
+            ok = send_email(email, test_permit, test_slots)
+            return {"type": "email", "target": email, "success": ok, "error": None if ok else "Send failed (check RESEND_API_KEY)"}
+
+        elif notif_type == "ntfy":
+            topic = kwargs.get("ntfy_topic", "")
+            if not topic:
+                return {"type": "ntfy", "target": "", "success": False, "error": "No ntfy topic provided"}
+            ok = send_ntfy(topic, test_permit, test_slots)
+            return {"type": "ntfy", "target": topic, "success": ok, "error": None if ok else "Send failed"}
+
+        elif notif_type == "sms":
+            phone = kwargs.get("sms_phone", "")
+            carrier = kwargs.get("sms_carrier", "")
+            if not phone or not carrier:
+                return {"type": "sms", "target": phone, "success": False, "error": "Phone and carrier required"}
+            ok = send_sms(phone, carrier, test_permit, test_slots)
+            return {"type": "sms", "target": phone, "success": ok, "error": None if ok else "Send failed (check RESEND_API_KEY)"}
+
+        else:
+            return {"type": notif_type, "target": "", "success": False, "error": f"Unknown type: {notif_type}"}
+    except Exception as e:
+        return {"type": notif_type, "target": "", "success": False, "error": str(e)}
+
+
 def send_all_notifications(tracker_config: dict, permit_name: str, slots: list) -> list:
     """
     Send notifications based on tracker configuration.

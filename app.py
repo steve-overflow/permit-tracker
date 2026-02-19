@@ -15,7 +15,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, g, jsonify, redirect, render_template, request, session, url_for
 from functools import wraps
 
-from notifications import send_all_notifications
+from notifications import send_all_notifications, send_test_notification
 from tracker import check_availability, get_permit_info, search_permits, find_available_slots
 
 # ---------------------------------------------------------------------------
@@ -34,6 +34,15 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 
 ACCESS_CODE = os.environ.get("ACCESS_CODE", "")
 DB_PATH = os.environ.get("DB_PATH", "tracker.db")
+
+# Cache-busting version (changes on each app restart)
+import time
+CACHE_VERSION = str(int(time.time()))
+
+
+@app.context_processor
+def inject_cache_version():
+    return {"cache_version": CACHE_VERSION}
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +404,28 @@ def api_list_alerts():
         del a["slots_json"]
         alerts.append(a)
     return jsonify(alerts)
+
+
+@app.route("/api/test-notification", methods=["POST"])
+@login_required
+def api_test_notification():
+    """Send a test notification to verify configuration."""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "JSON body required"}), 400
+
+    notif_type = data.get("type", "")
+    if notif_type not in ("email", "ntfy", "sms"):
+        return jsonify({"error": "type must be email, ntfy, or sms"}), 400
+
+    result = send_test_notification(
+        notif_type,
+        email=data.get("email", ""),
+        ntfy_topic=data.get("ntfy_topic", ""),
+        sms_phone=data.get("sms_phone", ""),
+        sms_carrier=data.get("sms_carrier", ""),
+    )
+    return jsonify(result)
 
 
 @app.route("/api/trackers/<int:tracker_id>/check", methods=["POST"])

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Permit Tracker</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v={{ cache_version }}">
 </head>
 <body>
 
@@ -62,15 +62,19 @@
 
     <div class="form-group">
       <label for="notify-email">Email (via Resend)</label>
-      <input type="email" id="notify-email" placeholder="you@example.com">
+      <div class="input-with-btn">
+        <input type="email" id="notify-email" placeholder="you@example.com">
+        <button class="btn-test" onclick="testNotification('email')">Test</button>
+      </div>
     </div>
 
     <div class="form-group">
       <label for="notify-ntfy">ntfy.sh Topic</label>
-      <div class="input-with-hint">
+      <div class="input-with-btn">
         <input type="text" id="notify-ntfy" placeholder="my-permit-alerts">
-        <span class="hint">Install <a href="https://ntfy.sh" target="_blank">ntfy app</a> and subscribe to this topic</span>
+        <button class="btn-test" onclick="testNotification('ntfy')">Test</button>
       </div>
+      <span class="hint">Install <a href="https://ntfy.sh" target="_blank">ntfy app</a> and subscribe to this topic</span>
     </div>
 
     <div class="form-row">
@@ -80,13 +84,16 @@
       </div>
       <div class="form-group">
         <label for="notify-carrier">Carrier</label>
-        <select id="notify-carrier">
-          <option value="">-- Select --</option>
-          <option value="verizon">Verizon</option>
-          <option value="att">AT&T</option>
-          <option value="tmobile">T-Mobile</option>
-          <option value="sprint">Sprint</option>
-        </select>
+        <div class="input-with-btn">
+          <select id="notify-carrier">
+            <option value="">-- Select --</option>
+            <option value="verizon">Verizon</option>
+            <option value="att">AT&T</option>
+            <option value="tmobile">T-Mobile</option>
+            <option value="sprint">Sprint</option>
+          </select>
+          <button class="btn-test" onclick="testNotification('sms')">Test</button>
+        </div>
       </div>
     </div>
 
@@ -405,6 +412,48 @@ async function checkNow(id) {
   } finally {
     btn.disabled = false;
     btn.textContent = 'Check Now';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Test notifications
+// ---------------------------------------------------------------------------
+async function testNotification(type) {
+  const btn = event.target;
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+
+  const body = { type };
+  if (type === 'email') {
+    body.email = document.getElementById('notify-email').value.trim();
+    if (!body.email) { alert('Enter an email address first.'); btn.disabled = false; btn.textContent = origText; return; }
+  } else if (type === 'ntfy') {
+    body.ntfy_topic = document.getElementById('notify-ntfy').value.trim();
+    if (!body.ntfy_topic) { alert('Enter an ntfy topic first.'); btn.disabled = false; btn.textContent = origText; return; }
+  } else if (type === 'sms') {
+    body.sms_phone = document.getElementById('notify-phone').value.trim();
+    body.sms_carrier = document.getElementById('notify-carrier').value;
+    if (!body.sms_phone || !body.sms_carrier) { alert('Enter phone and select carrier first.'); btn.disabled = false; btn.textContent = origText; return; }
+  }
+
+  try {
+    const resp = await fetch('/api/test-notification', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      alert('Test notification sent successfully!');
+    } else {
+      alert('Test failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    alert('Test failed: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
   }
 }
 

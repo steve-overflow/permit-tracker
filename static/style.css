@@ -184,6 +184,36 @@ header .subtitle {
   color: var(--blue);
 }
 
+.input-with-btn {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.input-with-btn input,
+.input-with-btn select {
+  flex: 1;
+}
+.btn-test {
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  border: 1px solid var(--gray-300);
+  background: var(--gray-50);
+  color: var(--gray-700);
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-test:hover {
+  background: var(--gray-200);
+  border-color: var(--gray-400);
+}
+.btn-test:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* ---- Divisions grid ---- */
 .divisions-grid {
   display: flex;
