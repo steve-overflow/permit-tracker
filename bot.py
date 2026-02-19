@@ -350,10 +350,25 @@ def handle_report(chat_id, user_id, first_name, args):
         json.dump(reports, f, indent=2)
 
     log.info("Bug report from %s: %s", first_name, args.strip())
+
+    # Try to wake the AI developer immediately
+    try:
+        webhook_url = os.environ.get("REPORT_WEBHOOK_URL", "")
+        if webhook_url:
+            payload = json.dumps({
+                "text": f"🐛 Permit Tracker bug report from {first_name}: {args.strip()}",
+                "report": report
+            }).encode()
+            req = Request(webhook_url, data=payload,
+                         headers={"Content-Type": "application/json"}, method="POST")
+            urlopen(req, timeout=10, context=_SSL_CTX)
+    except Exception as e:
+        log.error("Failed to send webhook: %s", e)
+
     send_message(chat_id,
         f"✅ <b>Report received!</b>\n\n"
-        f"Your message has been logged and the developer will be notified. "
-        f"They can usually fix and redeploy within minutes.\n\n"
+        f"The AI developer has been notified and will investigate immediately. "
+        f"Fixes are usually deployed within minutes — I'll message you here when it's done.\n\n"
         f"<i>You reported: {args.strip()}</i>"
     )
 

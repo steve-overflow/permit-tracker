@@ -453,6 +453,39 @@ def api_check_now(tracker_id):
 
 
 # ---------------------------------------------------------------------------
+# Reports API (for monitoring by AI developer)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/reports")
+@login_required
+def api_reports():
+    """Get bug reports."""
+    try:
+        with open("reports.json") as f:
+            reports = json.load(f)
+        return jsonify(reports)
+    except Exception:
+        return jsonify([])
+
+
+@app.route("/api/reports/reply", methods=["POST"])
+@login_required
+def api_report_reply():
+    """Send a reply to a user via Telegram bot."""
+    data = request.get_json()
+    chat_id = data.get("chat_id")
+    message = data.get("message")
+    if not chat_id or not message:
+        return jsonify({"error": "chat_id and message required"}), 400
+    try:
+        from bot import send_message
+        send_message(int(chat_id), message)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
 # Start
 # ---------------------------------------------------------------------------
 
