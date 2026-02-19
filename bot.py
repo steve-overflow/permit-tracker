@@ -728,12 +728,18 @@ ORDINALS = {
 }
 
 
-def _store_conv_state(chat_id, results, start_date, end_date):
-    """Store search results for a pending selection."""
+def _store_conv_state(chat_id, results, start_date, end_date, phase="search"):
+    """Store conversation state for multi-step flows.
+    
+    phase: 'search' = picking which permit(s), 'divisions' = picking which divisions
+    """
     CONV_STATE[str(chat_id)] = {
         "results": results,
         "date_range": {"start": start_date, "end": end_date},
         "timestamp": time.time(),
+        "phase": phase,
+        "divisions": None,  # populated during division selection
+        "selected_permits": None,  # permits chosen in search phase
     }
 
 
@@ -820,7 +826,7 @@ def _get_user_prefs(chat_id):
     return {}
 
 
-def _create_tracker_from_selection(chat_id, permit, start_date, end_date):
+def _create_tracker_from_selection(chat_id, permit, start_date, end_date, division_ids=None):
     """Create a tracker in the DB for a given permit, auto-filling notifications."""
     prefs = _get_user_prefs(chat_id)
 
@@ -834,7 +840,7 @@ def _create_tracker_from_selection(chat_id, permit, start_date, end_date):
         (
             permit["id"],
             permit["name"],
-            json.dumps([]),
+            json.dumps(division_ids or []),
             start_date,
             end_date,
             prefs.get("notify_email", ""),
@@ -850,16 +856,116 @@ def _create_tracker_from_selection(chat_id, permit, start_date, end_date):
     return tracker_id
 
 
+def _show_divisions_for_permit(chat_id, permit, start_date, end_date, selected_permits):
+    """Fetch divisions for a permit and ask user which to track."""
+    try:
+        info = get_permit_info(permit["id"])
+        divs = info.get("divisions", {})
+    except Exception:
+        divs = {}
+
+    if not divs or len(divs) <= 1:
+        # No meaningful division choice — just track all
+        return None  # Signal to skip division selection
+
+    div_list = sorted(divs.values(), key=lambda d: d.get("name", ""))
+
+    lines = [f"🏔️ <b>{permit['name']}</b> has {len(div_list)} sites/zones:\n"]
+    for i, d in enumerate(div_list, 1):
+        lines.append(f"{i}. {d.get('name', f'Division {d[\"id\"]}')}")
+
+    lines.append(f"\nReply: \"<b>all</b>\" to track all sites, pick specific ones like \"<b>1, 3, 5</b>\", or \"<b>skip</b>\"")
+
+    # Store division selection state
+    state = _get_conv_state(chat_id)
+    if state:
+        state["phase"] = "divisions"
+        state["divisions"] = div_list
+        state["selected_permits"] = selected_permits
+        state["current_permit"] = permit
+        state["timestamp"] = time.time()
+        CONV_STATE[str(chat_id)] = state
+
+    send_message(chat_id, "\n".join(lines))
+    return True  # Division selection is pending
+
+
+def _finish_tracker_creation(chat_id, permits_and_divs, start_date, end_date):
+    """Create trackers for permits with their selected divisions."""
+    created_ids = []
+    created_names = []
+    for permit, div_ids in permits_and_divs:
+        try:
+            tracker_id = _create_tracker_from_selection(chat_id, permit, start_date, end_date, div_ids)
+            created_ids.append(tracker_id)
+            div_note = f" ({len(div_ids)} site(s))" if div_ids else " (all sites)"
+            created_names.append(f"{permit['name']}{div_note}")
+        except Exception as e:
+            log.error("Failed to create tracker for %s: %s", permit["name"], e)
+            send_message(chat_id, f"⚠️ Failed to create tracker for {permit['name']}: {e}")
+
+    if created_ids:
+        names_text = "\n".join(f"  • {name} (#{tid})" for name, tid in zip(created_names, created_ids))
+        send_message(chat_id,
+            f"✅ Created {len(created_ids)} tracker(s)!\n\n"
+            f"{names_text}\n\n"
+            f"📅 {start_date} → {end_date}\n"
+            f"🔔 You'll get a Telegram notification here when spots open up.\n"
+            f"Checking every 20 minutes!"
+        )
+
+
 def handle_selection(chat_id, user_id, text):
-    """Handle user's selection from pending search results. Returns True if handled."""
+    """Handle user's selection from pending search results or division picks. Returns True if handled."""
     state = _get_conv_state(chat_id)
     if not state:
         return False
 
+    phase = state.get("phase", "search")
     results = state["results"]
     start_date = state["date_range"]["start"]
     end_date = state["date_range"]["end"]
     lower = text.lower().strip()
+
+    # === DIVISION SELECTION PHASE ===
+    if phase == "divisions":
+        div_list = state.get("divisions", [])
+        permit = state.get("current_permit")
+        selected_permits = state.get("selected_permits", [])
+
+        if lower in ("skip", "cancel", "no", "nah", "none"):
+            _clear_conv_state(chat_id)
+            send_message(chat_id, "👍 Cancelled. Send me a new search anytime!")
+            return True
+
+        if lower in ("all", "everything", "all sites", "all of them", "yes", "yeah", "yep"):
+            div_ids = []  # Empty = track all
+        else:
+            # Parse division numbers
+            selection = parse_selection(text, len(div_list))
+            if selection is None:
+                send_message(chat_id, f"Pick division numbers (1-{len(div_list)}), \"<b>all</b>\", or \"<b>skip</b>\"")
+                return True
+            if selection == "cancel":
+                _clear_conv_state(chat_id)
+                send_message(chat_id, "👍 Cancelled.")
+                return True
+            if selection == "all":
+                div_ids = []
+            else:
+                div_ids = [div_list[i]["id"] for i in selection]
+
+        _clear_conv_state(chat_id)
+
+        # Create tracker for this permit with selected divisions
+        permits_and_divs = [(permit, div_ids)]
+
+        # If there are more permits queued, we'd handle them here
+        # For now, create what we have
+        _finish_tracker_creation(chat_id, permits_and_divs, start_date, end_date)
+        return True
+
+    # === SEARCH SELECTION PHASE ===
 
     # Handle "show N" / "details N" — show full availability without consuming state
     import re
@@ -883,9 +989,8 @@ def handle_selection(chat_id, user_id, text):
     if selection is None:
         return False  # Not a selection — treat as new query
 
-    _clear_conv_state(chat_id)
-
     if selection == "cancel":
+        _clear_conv_state(chat_id)
         send_message(chat_id, "👍 Cancelled. Send me a new search anytime!")
         return True
 
@@ -894,28 +999,21 @@ def handle_selection(chat_id, user_id, text):
     else:
         selected = selection
 
-    # Create trackers for selected permits
-    created_ids = []
-    created_names = []
-    for idx in selected:
-        permit = results[idx]
-        try:
-            tracker_id = _create_tracker_from_selection(chat_id, permit, start_date, end_date)
-            created_ids.append(tracker_id)
-            created_names.append(permit["name"])
-        except Exception as e:
-            log.error("Failed to create tracker for %s: %s", permit["name"], e)
-            send_message(chat_id, f"⚠️ Failed to create tracker for {permit['name']}: {e}")
+    # For single permit selection, show division choice
+    if len(selected) == 1:
+        permit = results[selected[0]]
+        result = _show_divisions_for_permit(chat_id, permit, start_date, end_date, [permit])
+        if result:
+            return True  # Division selection is pending
+        # No divisions to pick — create directly
+        _clear_conv_state(chat_id)
+        _finish_tracker_creation(chat_id, [(permit, [])], start_date, end_date)
+        return True
 
-    if created_ids:
-        names_text = "\n".join(f"  • {name} (#{tid})" for name, tid in zip(created_names, created_ids))
-        send_message(chat_id,
-            f"✅ Created {len(created_ids)} tracker(s)!\n\n"
-            f"{names_text}\n\n"
-            f"📅 {start_date} → {end_date}\n"
-            f"🔔 You'll get a Telegram notification here when spots open up.\n"
-            f"Checking every 20 minutes!"
-        )
+    # Multiple permits selected — create trackers for all (tracking all divisions each)
+    _clear_conv_state(chat_id)
+    permits_and_divs = [(results[idx], []) for idx in selected]
+    _finish_tracker_creation(chat_id, permits_and_divs, start_date, end_date)
     return True
 
 
