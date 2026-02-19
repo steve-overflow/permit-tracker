@@ -3,162 +3,177 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
   <title>Permit Tracker</title>
   <link rel="stylesheet" href="/static/style.css?v={{ cache_version }}">
 </head>
 <body>
 
+<!-- Toast container -->
+<div id="toast-container" class="toast-container" aria-live="polite"></div>
+
 <header>
-  <div class="container">
-    <h1>Permit Tracker</h1>
-    <p class="subtitle">Recreation.gov permit availability alerts</p>
+  <div class="container header-inner">
+    <h1>
+      <span class="logo-icon" aria-hidden="true">P</span>
+      Permit Tracker
+    </h1>
+    <span class="subtitle">recreation.gov alerts</span>
   </div>
 </header>
 
 <main class="container">
 
-  <!-- ============================================================ -->
-  <!-- Step 1: Search -->
-  <!-- ============================================================ -->
-  <section class="card" id="search-section">
-    <h2>1. Find a Permit</h2>
-    <div class="search-bar">
-      <input type="text" id="search-input" placeholder="e.g. Half Dome, Enchantments, Whitney..."
-             autocomplete="off">
-      <button id="search-btn" onclick="doSearch()">Search</button>
+  <!-- Search (hero) -->
+  <section class="section" id="search-section">
+    <div class="card">
+      <h2>Find a permit</h2>
+      <div class="search-bar">
+        <input type="text" id="search-input"
+               placeholder="Half Dome, Enchantments, Whitney..."
+               autocomplete="off"
+               aria-label="Search for permits">
+        <button class="btn btn-primary" id="search-btn" onclick="doSearch()">Search</button>
+      </div>
+      <div id="search-results" class="results-list hidden"></div>
+      <div id="search-loading" class="loading-indicator hidden">
+        <div class="spinner"></div>
+        <span>Searching...</span>
+      </div>
     </div>
-    <div id="search-results" class="results-list hidden"></div>
-    <div id="search-loading" class="loading hidden">Searching...</div>
   </section>
 
-  <!-- ============================================================ -->
-  <!-- Step 2: Configure -->
-  <!-- ============================================================ -->
-  <section class="card hidden" id="config-section">
-    <h2>2. Configure Tracking</h2>
+  <!-- Configure (slides in) -->
+  <section class="section hidden" id="config-section">
+    <div class="card">
+      <div class="selected-permit" id="selected-permit-info">
+        <div class="permit-info"></div>
+      </div>
 
-    <div class="selected-permit" id="selected-permit-info"></div>
+      <h2>Configure tracking</h2>
 
-    <div class="form-group">
-      <label>Divisions / Entry Points</label>
-      <p class="hint">Select which divisions to track (leave all unchecked to track all)</p>
-      <div id="divisions-list" class="divisions-grid"></div>
-      <div id="divisions-loading" class="loading hidden">Loading divisions...</div>
-    </div>
-
-    <div class="form-row">
       <div class="form-group">
-        <label for="start-date">Start Date</label>
-        <input type="date" id="start-date">
+        <label>Divisions / Entry Points</label>
+        <p class="hint">Select which divisions to track (leave all unchecked to track all)</p>
+        <div id="divisions-list" class="divisions-grid"></div>
+        <div id="divisions-loading" class="loading-indicator hidden">
+          <div class="spinner"></div>
+          <span>Loading divisions...</span>
+        </div>
       </div>
-      <div class="form-group">
-        <label for="end-date">End Date</label>
-        <input type="date" id="end-date">
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="start-date">Start date</label>
+          <input type="date" id="start-date">
+        </div>
+        <div class="form-group">
+          <label for="end-date">End date</label>
+          <input type="date" id="end-date">
+        </div>
+      </div>
+
+      <h3>Notifications</h3>
+      <p class="hint" style="margin-bottom: 12px">How should we alert you when spots open up?</p>
+
+      <!-- Telegram -->
+      <div class="notif-card" id="telegram-card">
+        <div class="notif-card-header">
+          <div class="notif-meta">
+            <div class="notif-name">
+              Telegram
+              <span class="notif-badge notif-badge-rec">Recommended</span>
+            </div>
+            <div class="notif-desc">Open <a href="https://t.me/Permit_tracker_bot" target="_blank">@Permit_tracker_bot</a>, send <code>/start permit2025!</code>, paste your Chat ID below</div>
+          </div>
+          <span class="notif-check" aria-label="Configured">&#10003;</span>
+        </div>
+        <div class="notif-card-body">
+          <div class="input-row">
+            <input type="text" id="notify-telegram" placeholder="Chat ID (e.g. 123456789)" aria-label="Telegram Chat ID">
+            <button class="btn btn-secondary btn-sm" onclick="testNotification('telegram')">Test</button>
+          </div>
+          <div id="telegram-test-result" class="test-result hidden"></div>
+        </div>
+      </div>
+
+      <!-- ntfy -->
+      <div class="notif-card" id="ntfy-card">
+        <div class="notif-card-header">
+          <div class="notif-meta">
+            <div class="notif-name">Push Notifications</div>
+            <div class="notif-desc">Free via <a href="https://ntfy.sh" target="_blank">ntfy.sh</a> &mdash; <a href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank">iOS</a> / <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank">Android</a></div>
+          </div>
+          <span class="notif-check" aria-label="Configured">&#10003;</span>
+        </div>
+        <div class="notif-card-body">
+          <div class="input-row">
+            <input type="text" id="notify-ntfy" placeholder="permit-tracker-yourname" aria-label="ntfy topic">
+            <button class="btn btn-secondary btn-sm" onclick="generateTopic()">Generate</button>
+            <button class="btn btn-secondary btn-sm" onclick="testNotification('ntfy')">Test</button>
+          </div>
+          <div id="ntfy-test-result" class="test-result hidden"></div>
+        </div>
+      </div>
+
+      <!-- Email (collapsed) -->
+      <details class="notif-card" id="email-card">
+        <summary class="notif-card-header">
+          <div class="notif-meta">
+            <div class="notif-name">
+              Email
+              <span class="notif-badge notif-badge-opt">Optional</span>
+            </div>
+            <div class="notif-desc">May go to spam</div>
+          </div>
+          <span class="notif-check" aria-label="Configured">&#10003;</span>
+          <span class="chevron" aria-hidden="true">&#9656;</span>
+        </summary>
+        <div class="notif-card-body">
+          <div class="input-row">
+            <input type="email" id="notify-email" placeholder="you@example.com" aria-label="Email address">
+            <button class="btn btn-secondary btn-sm" onclick="testNotification('email')">Test</button>
+          </div>
+          <div id="email-test-result" class="test-result hidden"></div>
+        </div>
+      </details>
+
+      <!-- Hidden fields for SMS backward compat -->
+      <input type="hidden" id="notify-phone" value="">
+      <input type="hidden" id="notify-carrier" value="">
+
+      <div class="config-actions">
+        <button class="btn btn-primary" onclick="createTracker()">Start Tracking</button>
+        <button class="btn btn-secondary" onclick="resetConfig()">Back</button>
       </div>
     </div>
-
-    <h3>📱 Notifications</h3>
-    <p class="hint">How should we alert you when spots open up?</p>
-
-    <!-- Telegram — PRIMARY -->
-    <div class="notif-card notif-primary" id="telegram-setup">
-      <div class="notif-card-header">
-        <span class="notif-icon">✈️</span>
-        <div>
-          <strong>Telegram</strong> <span class="notif-badge notif-recommended">Recommended</span>
-          <div class="notif-desc">Get alerts right in Telegram — instant and reliable</div>
-        </div>
-      </div>
-      <div class="notif-card-body">
-        <ol class="setup-steps">
-          <li>Open <a href="https://t.me/Permit_tracker_bot" target="_blank">@Permit_tracker_bot</a> in Telegram</li>
-          <li>Send: <code>/start permit2025!</code></li>
-          <li>The bot will reply with your Chat ID — paste it below</li>
-        </ol>
-        <div class="input-with-btn">
-          <input type="text" id="notify-telegram" placeholder="Your Telegram Chat ID (e.g. 123456789)">
-          <button class="btn-test" onclick="testNotification('telegram')">📤 Test</button>
-        </div>
-        <div id="telegram-test-result" class="test-result hidden"></div>
-      </div>
-    </div>
-
-    <!-- ntfy — SECONDARY -->
-    <div class="notif-card" id="ntfy-setup">
-      <div class="notif-card-header">
-        <span class="notif-icon">🔔</span>
-        <div>
-          <strong>Push Notifications (ntfy)</strong>
-          <div class="notif-desc">Free push notifications via <a href="https://ntfy.sh" target="_blank">ntfy.sh</a> — no account needed</div>
-        </div>
-      </div>
-      <div class="notif-card-body">
-        <ol class="setup-steps">
-          <li>Install the ntfy app: <a href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank">iOS</a> · <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank">Android</a></li>
-          <li>Subscribe to your topic (click Generate if you need one)</li>
-          <li>Hit Test to verify it works</li>
-        </ol>
-        <div class="input-with-btn">
-          <input type="text" id="notify-ntfy" placeholder="permit-tracker-yourname">
-          <button class="btn-sm" onclick="generateTopic()">Generate</button>
-          <button class="btn-test" onclick="testNotification('ntfy')">📤 Test</button>
-        </div>
-        <div id="ntfy-test-result" class="test-result hidden"></div>
-      </div>
-    </div>
-
-    <!-- Email — OPTIONAL, collapsed -->
-    <details class="notif-card notif-optional">
-      <summary class="notif-card-header">
-        <span class="notif-icon">📧</span>
-        <div>
-          <strong>Email</strong> <span class="notif-badge notif-optional-badge">Optional</span>
-          <div class="notif-desc">Get email alerts (may go to spam)</div>
-        </div>
-      </summary>
-      <div class="notif-card-body">
-        <div class="input-with-btn">
-          <input type="email" id="notify-email" placeholder="you@example.com">
-          <button class="btn-test" onclick="testNotification('email')">📤 Test</button>
-        </div>
-        <div id="email-test-result" class="test-result hidden"></div>
-      </div>
-    </details>
-
-    <!-- Hidden fields for SMS (kept for backward compat) -->
-    <input type="hidden" id="notify-phone" value="">
-    <input type="hidden" id="notify-carrier" value="">
-
-    <button class="btn-primary" onclick="createTracker()">Start Tracking</button>
-    <button class="btn-secondary" onclick="resetConfig()">Back to Search</button>
   </section>
 
-  <!-- ============================================================ -->
-  <!-- Active Trackers — enhanced dashboard -->
-  <!-- ============================================================ -->
-  <section class="card" id="trackers-section">
+  <!-- Active Trackers (always visible) -->
+  <section class="section" id="trackers-section">
     <div class="section-header">
-      <h2>Active Trackers</h2>
-      <button class="btn-mike-test" id="mike-test-btn" onclick="runMikeTest(this)" title="Send a test notification to all configured channels">
-        🎤 Mike Test
+      <h2 style="margin-bottom:0">Active Trackers</h2>
+      <button class="btn-mike" id="mike-test-btn" onclick="runMikeTest(this)" title="Send a test notification to all configured channels">
+        Mike Test
       </button>
     </div>
-    <p class="hint" style="margin-top:-8px;margin-bottom:12px">
-      🎤 A daily "mike test" notification is sent every 24 hours to confirm the system is running and notifications work.
-    </p>
-    <div id="mike-test-result" class="test-result hidden" style="margin-bottom:12px"></div>
+    <div id="mike-test-result" class="test-result hidden"></div>
     <div id="trackers-list">
-      <p class="empty-state">No trackers yet. Search for a permit above to get started.</p>
+      <div class="empty-state">
+        <span class="empty-state-icon" aria-hidden="true">&#127956;</span>
+        No trackers yet. Search for a permit above to get started.
+      </div>
     </div>
   </section>
 
-  <!-- ============================================================ -->
   <!-- Alert History -->
-  <!-- ============================================================ -->
-  <section class="card" id="alerts-section">
+  <section class="section" id="alerts-section">
     <h2>Recent Alerts</h2>
     <div id="alerts-list">
-      <p class="empty-state">No alerts yet. Alerts will appear here when availability is found.</p>
+      <div class="empty-state">
+        <span class="empty-state-icon" aria-hidden="true">&#128276;</span>
+        No alerts yet. They'll appear here when availability is found.
+      </div>
     </div>
   </section>
 
@@ -166,32 +181,29 @@
 
 <footer>
   <div class="container">
-    <p>Checks recreation.gov every 20 minutes &bull; Data from <a href="https://www.recreation.gov" target="_blank">recreation.gov</a></p>
+    <p>Checks recreation.gov every 20 min &bull; Data from <a href="https://www.recreation.gov" target="_blank">recreation.gov</a></p>
   </div>
 </footer>
 
-<!-- ============================================================ -->
-<!-- Chat Interface -->
-<!-- ============================================================ -->
+<!-- Chat Widget -->
 <div id="chat-widget" class="chat-widget">
-  <button id="chat-toggle" class="chat-toggle" onclick="toggleChat()">
-    <span class="chat-toggle-icon">&#9993;</span>
+  <button id="chat-toggle" class="chat-toggle" onclick="toggleChat()" aria-label="Open chat assistant">
+    <span class="chat-toggle-icon" aria-hidden="true">&#9993;</span>
     <span class="chat-toggle-text">Chat</span>
   </button>
   <div id="chat-panel" class="chat-panel hidden">
     <div class="chat-header">
       <span>Permit Assistant</span>
-      <button class="chat-close" onclick="toggleChat()">&times;</button>
+      <button class="chat-close" onclick="toggleChat()" aria-label="Close chat">&times;</button>
     </div>
     <div id="chat-messages" class="chat-messages">
-      <div class="chat-msg chat-bot">Hi! Just tell me what permits you're looking for:<br>
-        <em>"river permits in Colorado for August"</em><br>
-        <em>"track Maroon Bells July through September"</em><br>
-        <em>"any Half Dome availability this summer?"</em><br>
-        I'll search and let you pick which to track!</div>
+      <div class="chat-msg chat-bot">Just tell me what permits you&rsquo;re looking for:<br>
+        <em>&ldquo;river permits in Colorado for August&rdquo;</em><br>
+        <em>&ldquo;track Maroon Bells July through September&rdquo;</em><br>
+        <em>&ldquo;any Half Dome availability this summer?&rdquo;</em></div>
     </div>
     <div class="chat-input-bar">
-      <input type="text" id="chat-input" placeholder="e.g. track Enchantments for August..." autocomplete="off">
+      <input type="text" id="chat-input" placeholder="e.g. track Enchantments for August..." autocomplete="off" aria-label="Chat message">
       <button id="chat-send" onclick="sendChat()">Send</button>
     </div>
   </div>
@@ -199,11 +211,60 @@
 
 <script>
 // ---------------------------------------------------------------------------
+// Toast system — replaces all alert() / confirm() calls
+// ---------------------------------------------------------------------------
+function showToast(type, title, msg, duration = 5000) {
+  const container = document.getElementById('toast-container');
+  const icons = { success: '\u2713', error: '\u2717', info: '\u24D8' };
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.innerHTML = `
+    <span class="toast-icon">${icons[type] || ''}</span>
+    <div class="toast-body">
+      <div class="toast-title">${esc(title)}</div>
+      ${msg ? `<div class="toast-msg">${esc(msg)}</div>` : ''}
+    </div>
+    <button class="toast-close" onclick="this.parentElement.remove()" aria-label="Dismiss">&times;</button>
+  `;
+  container.appendChild(toast);
+  if (duration > 0) {
+    setTimeout(() => {
+      toast.classList.add('toast-exit');
+      setTimeout(() => toast.remove(), 200);
+    }, duration);
+  }
+}
+
+function showConfirm(title, message) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+        <h3 id="confirm-title">${esc(title)}</h3>
+        <p>${esc(message)}</p>
+        <div class="confirm-actions">
+          <button class="btn btn-secondary" id="confirm-cancel">Cancel</button>
+          <button class="btn btn-primary" id="confirm-ok" style="background:var(--error);border-color:var(--error)">Delete</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const cancel = overlay.querySelector('#confirm-cancel');
+    const ok = overlay.querySelector('#confirm-ok');
+    ok.focus();
+    cancel.addEventListener('click', () => { overlay.remove(); resolve(false); });
+    ok.addEventListener('click', () => { overlay.remove(); resolve(true); });
+    overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); resolve(false); } });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
-let selectedPermit = null;  // {id, name, location}
-let permitDivisions = {};   // {id: {id, name, type}}
-let cachedTrackers = [];    // Store for chat to reference
+let selectedPermit = null;
+let permitDivisions = {};
+let cachedTrackers = [];
 
 // ---------------------------------------------------------------------------
 // Search
@@ -226,28 +287,28 @@ async function doSearch() {
     loadingEl.classList.add('hidden');
 
     if (data.error) {
-      resultsEl.innerHTML = `<p class="error">${data.error}</p>`;
+      resultsEl.innerHTML = `<p class="error-msg">${data.error}</p>`;
       resultsEl.classList.remove('hidden');
       return;
     }
 
     if (data.length === 0) {
-      resultsEl.innerHTML = '<p class="empty-state">No permits found. Try a different search.</p>';
+      resultsEl.innerHTML = '<div class="empty-state">No permits found. Try a different search.</div>';
       resultsEl.classList.remove('hidden');
       return;
     }
 
     resultsEl.innerHTML = data.map(p => `
-      <div class="result-item" onclick="selectPermit('${p.id}', '${esc(p.name)}', '${esc(p.location)}')">
+      <div class="result-item" onclick="selectPermit('${p.id}', '${esc(p.name)}', '${esc(p.location)}')" role="button" tabindex="0">
         <div class="result-name">${esc(p.name)}</div>
         <div class="result-location">${esc(p.location)}</div>
-        <div class="result-id">ID: ${p.id}</div>
+        <div class="result-id">${p.id}</div>
       </div>
     `).join('');
     resultsEl.classList.remove('hidden');
   } catch (err) {
     loadingEl.classList.add('hidden');
-    resultsEl.innerHTML = `<p class="error">Search failed: ${err.message}</p>`;
+    resultsEl.innerHTML = `<p class="error-msg">Search failed: ${err.message}</p>`;
     resultsEl.classList.remove('hidden');
   }
 }
@@ -265,15 +326,17 @@ async function selectPermit(id, name, location) {
   selectedPermit = { id, name, location };
 
   document.getElementById('selected-permit-info').innerHTML = `
-    <strong>${esc(name)}</strong>
-    <span class="permit-location">${esc(location)}</span>
-    <span class="permit-id">ID: ${id}</span>
+    <div class="permit-info">
+      <div class="permit-name">${esc(name)}</div>
+      <div class="permit-location">${esc(location)}</div>
+      <div class="permit-id">ID: ${id}</div>
+    </div>
   `;
 
   document.getElementById('config-section').classList.remove('hidden');
   document.getElementById('search-section').classList.add('hidden');
 
-  // Set default dates (next month span)
+  // Set default dates
   const today = new Date();
   const start = new Date(today);
   start.setDate(start.getDate() + 7);
@@ -294,7 +357,7 @@ async function selectPermit(id, name, location) {
     divLoading.classList.add('hidden');
 
     if (data.error) {
-      divList.innerHTML = `<p class="error">${data.error}</p>`;
+      divList.innerHTML = `<p class="error-msg">${data.error}</p>`;
       return;
     }
 
@@ -315,8 +378,11 @@ async function selectPermit(id, name, location) {
     `).join('');
   } catch (err) {
     divLoading.classList.add('hidden');
-    divList.innerHTML = `<p class="error">Failed to load divisions: ${err.message}</p>`;
+    divList.innerHTML = `<p class="error-msg">Failed to load divisions: ${err.message}</p>`;
   }
+
+  // Scroll config section into view
+  document.getElementById('config-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function isoDate(d) {
@@ -328,12 +394,12 @@ function resetConfig() {
   permitDivisions = {};
   document.getElementById('config-section').classList.add('hidden');
   document.getElementById('search-section').classList.remove('hidden');
-  // Re-apply saved preferences so they auto-fill for the next tracker
   document.getElementById('notify-email').value = '';
   document.getElementById('notify-ntfy').value = '';
   document.getElementById('notify-phone').value = '';
   document.getElementById('notify-carrier').value = '';
   applyPreferences();
+  updateNotifCards();
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +411,7 @@ async function createTracker() {
   const startDate = document.getElementById('start-date').value;
   const endDate = document.getElementById('end-date').value;
   if (!startDate || !endDate) {
-    alert('Please select a date range.');
+    showToast('error', 'Missing dates', 'Please select a start and end date.');
     return;
   }
 
@@ -356,11 +422,10 @@ async function createTracker() {
   const carrier = document.getElementById('notify-carrier').value;
 
   if (!telegram && !ntfy && !email) {
-    alert('Please set up at least one notification method (Telegram recommended!)');
+    showToast('error', 'No notifications', 'Set up at least one notification method.');
     return;
   }
 
-  // Collect selected divisions
   const checkedDivs = [...document.querySelectorAll('.div-checkbox:checked')].map(cb => cb.value);
 
   const body = {
@@ -384,15 +449,16 @@ async function createTracker() {
     });
     const data = await resp.json();
     if (data.error) {
-      alert('Error: ' + data.error);
+      showToast('error', 'Error', data.error);
       return;
     }
 
-    savePreferences();  // Remember notification settings for next time
+    savePreferences();
+    showToast('success', 'Tracker created', `Now tracking ${selectedPermit.name}`);
     resetConfig();
     loadTrackers();
   } catch (err) {
-    alert('Failed to create tracker: ' + err.message);
+    showToast('error', 'Failed', err.message);
   }
 }
 
@@ -427,7 +493,7 @@ function timeAgo(dateStr) {
 function nextCheckIn(lastCheckedAt) {
   if (!lastCheckedAt) return 'Soon';
   const last = new Date(lastCheckedAt + 'Z');
-  const next = new Date(last.getTime() + 10 * 60 * 1000); // 10 min interval
+  const next = new Date(last.getTime() + 10 * 60 * 1000);
   const now = new Date();
   const diffMs = next - now;
   if (diffMs <= 0) return 'Any moment';
@@ -437,17 +503,26 @@ function nextCheckIn(lastCheckedAt) {
 }
 
 function getHealthStatus(t) {
-  if (!t.active) return { cls: 'health-paused', label: 'Paused', icon: '&#9646;&#9646;' };
-  if (!t.last_checked_at) return { cls: 'health-waiting', label: 'Waiting for first check', icon: '&#9679;' };
+  if (!t.active) return { dot: 'status-dot-paused', label: 'Paused' };
+  if (!t.last_checked_at) return { dot: 'status-dot-waiting', label: 'Waiting' };
   const last = new Date(t.last_checked_at + 'Z');
   const diffMin = (new Date() - last) / 60000;
-  if (diffMin < 15) return { cls: 'health-good', label: 'Checking', icon: '&#9679;' };
-  if (diffMin < 30) return { cls: 'health-stale', label: 'Stale', icon: '&#9679;' };
-  return { cls: 'health-error', label: 'Not checking', icon: '&#9679;' };
+  if (diffMin < 15) return { dot: 'status-dot-active', label: 'Active' };
+  if (diffMin < 30) return { dot: 'status-dot-stale', label: 'Stale' };
+  return { dot: 'status-dot-error', label: 'Not checking' };
 }
 
+// SVG icons for tracker actions
+const ICONS = {
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>',
+  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>',
+};
+
 // ---------------------------------------------------------------------------
-// Load trackers — enhanced dashboard
+// Load trackers
 // ---------------------------------------------------------------------------
 async function loadTrackers() {
   try {
@@ -457,7 +532,10 @@ async function loadTrackers() {
     const el = document.getElementById('trackers-list');
 
     if (trackers.length === 0) {
-      el.innerHTML = '<p class="empty-state">No trackers yet. Search for a permit above to get started.</p>';
+      el.innerHTML = `<div class="empty-state">
+        <span class="empty-state-icon" aria-hidden="true">&#127956;</span>
+        No trackers yet. Search for a permit above to get started.
+      </div>`;
       return;
     }
 
@@ -467,64 +545,56 @@ async function loadTrackers() {
         : 'All divisions';
       const health = getHealthStatus(t);
       const ago = timeAgo(t.last_checked_at);
-      const nextIn = t.active ? nextCheckIn(t.last_checked_at) : '—';
+      const nextIn = t.active ? nextCheckIn(t.last_checked_at) : '\u2014';
       const alertCount = t.alert_count || 0;
 
-      // Notification channel badges — only show configured ones as green, skip unconfigured
-      let channelBadges = '';
+      let channelPills = '';
       if (t.notify_telegram_chat_id)
-        channelBadges += `<span class="channel-badge channel-on" title="Telegram: ${esc(t.notify_telegram_chat_id)}">✈️ Telegram</span>`;
+        channelPills += `<span class="channel-pill channel-pill-on">Telegram</span>`;
       if (t.notify_ntfy_topic)
-        channelBadges += `<span class="channel-badge channel-on" title="ntfy: ${esc(t.notify_ntfy_topic)}">🔔 Push</span>`;
+        channelPills += `<span class="channel-pill channel-pill-on">Push</span>`;
       if (t.notify_email)
-        channelBadges += `<span class="channel-badge channel-on" title="Email: ${esc(t.notify_email)}">📧 Email</span>`;
-      if (!channelBadges)
-        channelBadges = '<span class="channel-badge channel-off">⚠️ No notifications set up</span>';
+        channelPills += `<span class="channel-pill channel-pill-on">Email</span>`;
+      if (!channelPills)
+        channelPills = '<span class="channel-pill channel-pill-warn">No notifications</span>';
 
       return `
-        <div class="tracker-card ${health.cls}">
+        <div class="tracker-card">
           <div class="tracker-header">
-            <div>
+            <div class="tracker-info">
               <div class="tracker-name">
-                <span class="health-dot ${health.cls}" title="${health.label}">${health.icon}</span>
+                <span class="status-dot ${health.dot}" title="${health.label}"></span>
                 ${esc(t.permit_name)}
               </div>
               <div class="tracker-meta">
-                ${t.start_date} to ${t.end_date} &bull; ${divText}
+                ${t.start_date} &mdash; ${t.end_date} &bull; ${divText}
               </div>
             </div>
             <span class="status-badge ${t.active ? 'status-active' : 'status-paused'}">${t.active ? 'Active' : 'Paused'}</span>
           </div>
 
           <div class="tracker-stats">
-            <div class="stat">
-              <span class="stat-label">Last checked</span>
+            <div class="stat-item">
+              <span class="stat-label">Checked</span>
               <span class="stat-value">${ago}</span>
             </div>
-            <div class="stat">
-              <span class="stat-label">Next check</span>
+            <div class="stat-item">
+              <span class="stat-label">Next</span>
               <span class="stat-value">${nextIn}</span>
             </div>
-            <div class="stat">
-              <span class="stat-label">Alerts sent</span>
+            <div class="stat-item">
+              <span class="stat-label">Alerts</span>
               <span class="stat-value">${alertCount}</span>
             </div>
-            <div class="stat">
-              <span class="stat-label">Status</span>
-              <span class="stat-value stat-status ${health.cls}">${health.label}</span>
-            </div>
           </div>
 
-          <div class="tracker-channels">
-            <span class="channels-label">Notifications:</span>
-            ${channelBadges}
-          </div>
+          <div class="tracker-channels">${channelPills}</div>
 
           <div class="tracker-actions">
-            <button class="btn-sm btn-check" onclick="checkNow(${t.id}, this)">Check Now</button>
-            <button class="btn-sm btn-test-all" onclick="testAllNotifications(${t.id}, this)">Test Notifications</button>
-            <button class="btn-sm btn-toggle" onclick="toggleTracker(${t.id})">${t.active ? 'Pause' : 'Resume'}</button>
-            <button class="btn-sm btn-delete" onclick="deleteTracker(${t.id})">Delete</button>
+            <button class="btn-icon" onclick="checkNow(${t.id}, this)" title="Check now">${ICONS.refresh}</button>
+            <button class="btn-icon" onclick="testAllNotifications(${t.id}, this)" title="Test notifications">${ICONS.bell}</button>
+            <button class="btn-icon" onclick="toggleTracker(${t.id})" title="${t.active ? 'Pause' : 'Resume'}">${t.active ? ICONS.pause : ICONS.play}</button>
+            <button class="btn-icon btn-danger" onclick="deleteTracker(${t.id})" title="Delete">${ICONS.trash}</button>
           </div>
         </div>
       `;
@@ -540,53 +610,58 @@ async function toggleTracker(id) {
 }
 
 async function deleteTracker(id) {
-  if (!confirm('Delete this tracker? This cannot be undone.')) return;
+  const ok = await showConfirm('Delete tracker?', 'This cannot be undone.');
+  if (!ok) return;
   await fetch(`/api/trackers/${id}`, { method: 'DELETE' });
+  showToast('info', 'Deleted', 'Tracker removed.');
   loadTrackers();
   loadAlerts();
 }
 
 async function checkNow(id, btn) {
   btn.disabled = true;
-  btn.textContent = 'Checking...';
+  btn.classList.add('skeleton');
 
   try {
     const resp = await fetch(`/api/trackers/${id}/check`, { method: 'POST' });
     const data = await resp.json();
 
     if (data.slots && data.slots.length > 0) {
-      alert(`Found ${data.slots.length} available slot(s)! Check the availability details.`);
+      showToast('success', 'Availability found!', `${data.slots.length} available slot(s).`);
     } else {
-      alert('No availability found right now.');
+      showToast('info', 'No availability', 'Nothing open right now.');
     }
     loadTrackers();
   } catch (err) {
-    alert('Check failed: ' + err.message);
+    showToast('error', 'Check failed', err.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Check Now';
+    btn.classList.remove('skeleton');
   }
 }
 
 async function testAllNotifications(id, btn) {
   btn.disabled = true;
-  btn.textContent = 'Sending...';
+  btn.classList.add('skeleton');
   try {
     const resp = await fetch(`/api/trackers/${id}/test-notifications`, { method: 'POST' });
     const data = await resp.json();
     if (data.error) {
-      alert('Error: ' + data.error);
+      showToast('error', 'Test failed', data.error);
     } else {
-      const summary = data.results.map(r =>
-        `${r.type}: ${r.success ? 'sent' : 'FAILED' + (r.error ? ' (' + r.error + ')' : '')}`
-      ).join('\n');
-      alert('Test results:\n' + summary);
+      const ok = data.results.filter(r => r.success).length;
+      const fail = data.results.filter(r => !r.success).length;
+      if (fail === 0) {
+        showToast('success', 'All sent', `${ok} notification(s) delivered.`);
+      } else {
+        showToast('error', 'Partial failure', `${ok} sent, ${fail} failed.`);
+      }
     }
   } catch (err) {
-    alert('Test failed: ' + err.message);
+    showToast('error', 'Test failed', err.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Test Notifications';
+    btn.classList.remove('skeleton');
   }
 }
 
@@ -597,20 +672,20 @@ async function testNotification(type) {
   const btn = event.target;
   const origText = btn.textContent;
   btn.disabled = true;
-  btn.textContent = '⏳ Sending...';
+  btn.textContent = 'Sending...';
 
   const resultEl = document.getElementById(`${type}-test-result`);
 
   const body = { type };
   if (type === 'telegram') {
     body.telegram_chat_id = document.getElementById('notify-telegram').value.trim();
-    if (!body.telegram_chat_id) { showTestResult(resultEl, false, 'Enter your Telegram Chat ID first'); btn.disabled = false; btn.textContent = origText; return; }
+    if (!body.telegram_chat_id) { showTestResult(resultEl, false, 'Enter your Chat ID first'); btn.disabled = false; btn.textContent = origText; return; }
   } else if (type === 'email') {
     body.email = document.getElementById('notify-email').value.trim();
-    if (!body.email) { showTestResult(resultEl, false, 'Enter an email address first'); btn.disabled = false; btn.textContent = origText; return; }
+    if (!body.email) { showTestResult(resultEl, false, 'Enter an email first'); btn.disabled = false; btn.textContent = origText; return; }
   } else if (type === 'ntfy') {
     body.ntfy_topic = document.getElementById('notify-ntfy').value.trim();
-    if (!body.ntfy_topic) { showTestResult(resultEl, false, 'Enter an ntfy topic first'); btn.disabled = false; btn.textContent = origText; return; }
+    if (!body.ntfy_topic) { showTestResult(resultEl, false, 'Enter a topic first'); btn.disabled = false; btn.textContent = origText; return; }
   } else if (type === 'sms') {
     body.sms_phone = document.getElementById('notify-phone').value.trim();
     body.sms_carrier = document.getElementById('notify-carrier').value;
@@ -625,12 +700,13 @@ async function testNotification(type) {
     });
     const data = await resp.json();
     if (data.success) {
-      showTestResult(resultEl, true, '✅ Sent! Check your ' + type);
+      showTestResult(resultEl, true, 'Sent! Check your ' + type);
+      updateNotifCards();
     } else {
-      showTestResult(resultEl, false, '❌ ' + (data.error || 'Unknown error'));
+      showTestResult(resultEl, false, data.error || 'Unknown error');
     }
   } catch (err) {
-    showTestResult(resultEl, false, '❌ ' + err.message);
+    showTestResult(resultEl, false, err.message);
   } finally {
     btn.disabled = false;
     btn.textContent = origText;
@@ -639,34 +715,54 @@ async function testNotification(type) {
 
 async function runMikeTest(btn) {
   btn.disabled = true;
-  btn.textContent = '🎤 Sending...';
+  btn.textContent = 'Sending...';
   const resultEl = document.getElementById('mike-test-result');
   try {
     const resp = await fetch('/api/mike-test', { method: 'POST' });
     const data = await resp.json();
     if (data.error) {
-      showTestResult(resultEl, false, '❌ ' + data.error);
+      showToast('error', 'Mike test failed', data.error);
     } else {
-      const summary = data.results.map(r =>
-        `${r.success ? '✅' : '❌'} ${r.type}`
-      ).join('  ');
-      showTestResult(resultEl, data.results.every(r => r.success), '🎤 Mike test sent! ' + summary);
+      const ok = data.results.filter(r => r.success).length;
+      const fail = data.results.filter(r => !r.success).length;
+      if (fail === 0) {
+        showToast('success', 'Mike test sent', `${ok} notification(s) delivered.`);
+      } else {
+        showToast('error', 'Partial failure', `${ok} sent, ${fail} failed.`);
+      }
     }
   } catch (err) {
-    showTestResult(resultEl, false, '❌ ' + err.message);
+    showToast('error', 'Mike test failed', err.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = '🎤 Mike Test';
+    btn.textContent = 'Mike Test';
   }
 }
 
 function showTestResult(el, success, msg) {
-  if (!el) { alert(msg); return; }
+  if (!el) { showToast(success ? 'success' : 'error', success ? 'Success' : 'Error', msg); return; }
   el.classList.remove('hidden');
   el.className = `test-result ${success ? 'test-success' : 'test-fail'}`;
   el.textContent = msg;
-  setTimeout(() => el.classList.add('hidden'), 8000);
+  setTimeout(() => el.classList.add('hidden'), 6000);
 }
+
+// Update notif card green-check state
+function updateNotifCards() {
+  const tg = document.getElementById('notify-telegram').value.trim();
+  document.getElementById('telegram-card').classList.toggle('notif-configured', !!tg);
+
+  const ntfy = document.getElementById('notify-ntfy').value.trim();
+  document.getElementById('ntfy-card').classList.toggle('notif-configured', !!ntfy);
+
+  const em = document.getElementById('notify-email').value.trim();
+  document.getElementById('email-card').classList.toggle('notif-configured', !!em);
+}
+
+// Watch inputs for live check updates
+['notify-telegram', 'notify-ntfy', 'notify-email'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updateNotifCards);
+});
 
 // ---------------------------------------------------------------------------
 // Load alerts
@@ -678,7 +774,10 @@ async function loadAlerts() {
     const el = document.getElementById('alerts-list');
 
     if (alerts.length === 0) {
-      el.innerHTML = '<p class="empty-state">No alerts yet. Alerts will appear here when availability is found.</p>';
+      el.innerHTML = `<div class="empty-state">
+        <span class="empty-state-icon" aria-hidden="true">&#128276;</span>
+        No alerts yet. They'll appear here when availability is found.
+      </div>`;
       return;
     }
 
@@ -699,11 +798,11 @@ async function loadAlerts() {
       return `
         <div class="alert-card">
           <div class="alert-header">
-            <strong>${esc(a.permit_name)}</strong>
-            <span class="alert-time">${formatDate(a.created_at)}</span>
+            <span class="alert-permit-name">${esc(a.permit_name)}</span>
+            <span class="alert-time">${timeAgo(a.created_at)}</span>
           </div>
           <div class="alert-slots">${slotLines}</div>
-          <div class="alert-notifs">${notifResults}</div>
+          ${notifResults ? `<div class="alert-notifs">${notifResults}</div>` : ''}
         </div>
       `;
     }).join('');
@@ -713,7 +812,7 @@ async function loadAlerts() {
 }
 
 // ---------------------------------------------------------------------------
-// User Preferences — auto-fill notification fields
+// User Preferences
 // ---------------------------------------------------------------------------
 let savedPreferences = {};
 
@@ -734,6 +833,7 @@ function applyPreferences() {
   if (p.notify_email) document.getElementById('notify-email').value = p.notify_email;
   if (p.notify_sms_phone) document.getElementById('notify-phone').value = p.notify_sms_phone;
   if (p.notify_sms_carrier) document.getElementById('notify-carrier').value = p.notify_sms_carrier;
+  updateNotifCards();
 }
 
 async function generateTopic() {
@@ -741,8 +841,9 @@ async function generateTopic() {
     const resp = await fetch('/api/generate-topic', { method: 'POST' });
     const data = await resp.json();
     document.getElementById('notify-ntfy').value = data.topic;
+    updateNotifCards();
   } catch (e) {
-    alert('Failed to generate topic');
+    showToast('error', 'Error', 'Failed to generate topic');
   }
 }
 
@@ -763,15 +864,15 @@ async function savePreferences() {
 }
 
 // ---------------------------------------------------------------------------
-// Chat interface — natural language conversational tracker creation
+// Chat interface
 // ---------------------------------------------------------------------------
 let chatOpen = false;
-// Conversation state for multi-step search → select → create flow
-let chatState = null; // {results: [...], dateRange: {start, end}, timestamp: number}
+let chatState = null;
 
 function toggleChat() {
   chatOpen = !chatOpen;
-  document.getElementById('chat-panel').classList.toggle('hidden', !chatOpen);
+  const panel = document.getElementById('chat-panel');
+  panel.classList.toggle('hidden', !chatOpen);
   if (chatOpen) document.getElementById('chat-input').focus();
 }
 
@@ -779,12 +880,30 @@ const chatInput = document.getElementById('chat-input');
 chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
 
 function addChatMsg(text, isUser) {
+  // Remove typing indicator if present
+  const typing = document.querySelector('.chat-typing');
+  if (typing) typing.remove();
+
   const el = document.getElementById('chat-messages');
   const div = document.createElement('div');
   div.className = `chat-msg ${isUser ? 'chat-user' : 'chat-bot'}`;
   div.innerHTML = text;
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
+}
+
+function showTyping() {
+  const el = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = 'chat-typing';
+  div.innerHTML = '<span></span><span></span><span></span>';
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function removeTyping() {
+  const typing = document.querySelector('.chat-typing');
+  if (typing) typing.remove();
 }
 
 // Month name mapping
@@ -802,17 +921,15 @@ function parseDateRange(text) {
   const now = new Date();
   let year = now.getFullYear();
 
-  // Check for season
   for (const [season, [sm, em]] of Object.entries(SEASONS)) {
     if (lower.includes(season)) {
       let sy = year, ey = year;
-      if (sm > em) ey++; // winter wraps
+      if (sm > em) ey++;
       if (new Date(ey, em, 1) < now) { sy++; ey++; }
       return { start: `${sy}-${String(sm).padStart(2,'0')}-01`, end: `${ey}-${String(em).padStart(2,'0')}-28` };
     }
   }
 
-  // Check for month names
   const foundMonths = [];
   for (const [name, num] of Object.entries(MONTHS)) {
     const re = new RegExp('\\b' + name + '\\b', 'i');
@@ -820,7 +937,6 @@ function parseDateRange(text) {
       if (!foundMonths.find(m => m.num === num)) foundMonths.push({ name, num });
     }
   }
-  // Deduplicate by number (e.g. "jul" and "july" both map to 7)
   const uniqueMonths = [];
   const seen = new Set();
   for (const m of foundMonths) {
@@ -845,7 +961,6 @@ function parseDateRange(text) {
     return { start: `${y}-${String(m).padStart(2,'0')}-01`, end: `${y}-${String(m).padStart(2,'0')}-${lastDay}` };
   }
 
-  // Default: next 3 months
   const start = new Date(now);
   start.setDate(start.getDate() + 7);
   const end = new Date(start);
@@ -854,13 +969,11 @@ function parseDateRange(text) {
 }
 
 function extractPermitName(text) {
-  // Remove command words and filler to extract the permit name
   const filler = ['track','watch','monitor','alert','notify','me','to','for','in','on',
     'check','show','search','find','look','up','any','the','a','an','at','of',
     'permits','permit','availability','available','spots','openings','during','from',
     'through','this','next','please','can','you','i','want','would','like',
     'what','which','are','is','there','get','with','about','river','wilderness'];
-  // Also remove month/season words
   const dateWords = Object.keys(MONTHS).concat(Object.keys(SEASONS));
   const removeWords = new Set([...filler, ...dateWords]);
   const words = text.split(/\s+/).filter(w => !removeWords.has(w.toLowerCase()) && !/^\d+$/.test(w));
@@ -871,18 +984,14 @@ const ORDINALS = {first:1, second:2, third:3, fourth:4, fifth:5, sixth:6, sevent
 
 function parseSelection(text, maxIndex) {
   let lower = text.toLowerCase().trim();
-  // Cancel patterns
   if (['none','cancel','nevermind','never mind','nah','no','nope','skip','n'].includes(lower)) return 'cancel';
-  // All patterns
   if (['all','yes','track all','everything','all of them','track everything','yep','y','sure'].includes(lower)) return 'all';
 
-  // Replace ordinals with numbers
   for (const [word, num] of Object.entries(ORDINALS)) {
     lower = lower.replace(new RegExp('\\b' + word + '\\b', 'g'), String(num));
   }
 
   const indices = new Set();
-  // Parse ranges like "1-3" or "1 through 3"
   let remaining = lower;
   for (const m of lower.matchAll(/(\d+)\s*(?:-|through|thru|to)\s*(\d+)/g)) {
     const start = parseInt(m[1]), end = parseInt(m[2]);
@@ -891,7 +1000,6 @@ function parseSelection(text, maxIndex) {
     }
     remaining = remaining.replace(m[0], '');
   }
-  // Parse individual numbers
   for (const m of remaining.matchAll(/(\d+)/g)) {
     const num = parseInt(m[1]);
     if (num >= 1 && num <= maxIndex) indices.add(num - 1);
@@ -905,9 +1013,8 @@ async function createTrackersFromSelection(selectedIndices) {
   const results = chatState.results;
   const dateRange = chatState.dateRange;
   const prefs = savedPreferences;
-  chatState = null; // Clear state
+  chatState = null;
 
-  // Check if notifications are configured
   if (!prefs.notify_telegram_chat_id && !prefs.notify_email && !prefs.notify_ntfy_topic && !prefs.notify_sms_phone) {
     addChatMsg(`Set up notification preferences in the form above first, then try again.`, false);
     return;
@@ -942,11 +1049,11 @@ async function createTrackersFromSelection(selectedIndices) {
   }
 
   if (created.length > 0) {
-    const names = created.map(c => `<strong>${esc(c.name)}</strong> (#${c.id})`).join('<br>');
+    const names = created.map(c => `<strong>${esc(c.name)}</strong>`).join('<br>');
     addChatMsg(
-      `✅ Created ${created.length} tracker(s)!<br><br>${names}<br><br>` +
-      `📅 ${dateRange.start} → ${dateRange.end}<br>` +
-      `Checking every 10 min. You'll get a notification when spots open!`, false
+      `Created ${created.length} tracker(s):<br><br>${names}<br><br>` +
+      `${dateRange.start} to ${dateRange.end}<br>` +
+      `You'll get a notification when spots open!`, false
     );
     loadTrackers();
   }
@@ -961,55 +1068,51 @@ async function sendChat() {
 
   const lower = text.toLowerCase().trim();
 
-  // --- Step 1: Check if user is responding to pending selection ---
+  // Check if user is responding to pending selection
   if (chatState && chatState.results) {
-    // Expire after 10 minutes
     if (Date.now() - chatState.timestamp > 600000) {
       chatState = null;
     } else {
       const selection = parseSelection(text, chatState.results.length);
       if (selection === 'cancel') {
         chatState = null;
-        addChatMsg('👍 Cancelled. Send me a new search anytime!', false);
+        addChatMsg('Cancelled. Send me a new search anytime!', false);
         return;
       }
       if (selection === 'all') {
+        showTyping();
         await createTrackersFromSelection([...Array(chatState.results.length).keys()]);
         return;
       }
       if (Array.isArray(selection)) {
+        showTyping();
         await createTrackersFromSelection(selection);
         return;
       }
-      // selection is null — not a selection, treat as new query (fall through)
       chatState = null;
     }
   }
-
-  // --- Step 2: Handle explicit commands ---
 
   // Help command
   if (/^help$/i.test(lower)) {
     addChatMsg(`<strong>Just type naturally!</strong><br>
       <em>"river permits in Colorado for August"</em><br>
-      <em>"track Maroon Bells July through September"</em><br>
-      <em>"any Half Dome availability this summer?"</em><br><br>
-      I'll search, show numbered results, and you pick which to track.<br><br>
+      <em>"track Maroon Bells July through September"</em><br><br>
       <strong>Other commands:</strong><br>
-      <em>list</em> / <em>status</em> — show active trackers<br>
-      <em>delete tracker [id]</em> — remove a tracker<br>
-      <em>help</em> — show this message`, false);
+      <em>list</em> / <em>status</em> \u2014 show active trackers<br>
+      <em>delete tracker [id]</em> \u2014 remove a tracker<br>
+      <em>help</em> \u2014 show this message`, false);
     return;
   }
 
   // List / status commands
   if (/^(list|status|trackers|what am i tracking|my trackers|show trackers)\??$/i.test(lower)) {
     if (cachedTrackers.length === 0) {
-      addChatMsg("You don't have any trackers yet. Try: <em>track Half Dome for July</em>", false);
+      addChatMsg("No trackers yet. Try: <em>track Half Dome for July</em>", false);
     } else {
       const lines = cachedTrackers.map(t => {
         const health = getHealthStatus(t);
-        return `<strong>#${t.id}</strong> ${esc(t.permit_name)} (${t.start_date} to ${t.end_date}) — ${health.label}`;
+        return `<strong>#${t.id}</strong> ${esc(t.permit_name)} (${t.start_date} to ${t.end_date}) \u2014 ${health.label}`;
       }).join('<br>');
       addChatMsg(lines, false);
     }
@@ -1031,26 +1134,27 @@ async function sendChat() {
     return;
   }
 
-  // --- Step 3: Treat as a natural language search query ---
+  // Natural language search
   const permitName = extractPermitName(text);
   if (!permitName || permitName.length < 2) {
-    addChatMsg("I didn't understand that. Try something like: <em>river permits in Colorado for August</em><br>Type <strong>help</strong> for more.", false);
+    addChatMsg("I didn't catch that. Try something like: <em>river permits in Colorado for August</em>", false);
     return;
   }
 
   const dateRange = parseDateRange(text);
-  addChatMsg(`🔍 Searching for "${esc(permitName)}"...`, false);
+  showTyping();
 
   try {
     const resp = await fetch(`/api/search?q=${encodeURIComponent(permitName)}`);
     const results = await resp.json();
+    removeTyping();
+
     if (results.error || results.length === 0) {
       addChatMsg(`No permits found for "${esc(permitName)}". Try different keywords.`, false);
       return;
     }
 
     const limited = results.slice(0, 10);
-    // Store conversation state
     chatState = { results: limited, dateRange, timestamp: Date.now() };
 
     if (limited.length === 1) {
@@ -1058,22 +1162,23 @@ async function sendChat() {
       addChatMsg(
         `Found 1 permit:<br><br>` +
         `1. <strong>${esc(p.name)}</strong><br>` +
-        `&nbsp;&nbsp;&nbsp;📍 ${esc(p.location)} (ID: ${p.id})<br><br>` +
-        `📅 ${dateRange.start} → ${dateRange.end}<br><br>` +
-        `Reply: <strong>yes</strong> to track it, or <strong>cancel</strong> to skip`, false
+        `&nbsp;&nbsp;&nbsp;${esc(p.location)}<br><br>` +
+        `${dateRange.start} to ${dateRange.end}<br><br>` +
+        `Reply <strong>yes</strong> to track, or <strong>cancel</strong>`, false
       );
     } else {
       const lines = limited.map((p, i) =>
-        `${i+1}. <strong>${esc(p.name)}</strong><br>&nbsp;&nbsp;&nbsp;📍 ${esc(p.location)} (ID: ${p.id})`
+        `${i+1}. <strong>${esc(p.name)}</strong><br>&nbsp;&nbsp;&nbsp;${esc(p.location)}`
       ).join('<br>');
       addChatMsg(
         `Found ${limited.length} permit(s):<br><br>` +
         `${lines}<br><br>` +
-        `📅 ${dateRange.start} → ${dateRange.end}<br><br>` +
-        `Reply: "<strong>all</strong>" to track everything, "<strong>1 and 3</strong>", "<strong>just 2</strong>", or "<strong>cancel</strong>"`, false
+        `${dateRange.start} to ${dateRange.end}<br><br>` +
+        `Reply "<strong>all</strong>", "<strong>1 and 3</strong>", or "<strong>cancel</strong>"`, false
       );
     }
   } catch (err) {
+    removeTyping();
     addChatMsg(`Search failed: ${err.message}`, false);
   }
 }
@@ -1085,7 +1190,7 @@ loadTrackers();
 loadAlerts();
 loadPreferences();
 
-// Auto-refresh every 30 seconds for more responsive dashboard
+// Auto-refresh every 30 seconds
 setInterval(() => {
   loadTrackers();
   loadAlerts();
