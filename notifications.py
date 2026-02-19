@@ -1,0 +1,218 @@
+"""
+Notification senders for permit availability alerts.
+
+Supports:
+  - Email via Resend API
+  - Push notifications via ntfy.sh
+  - SMS via email-to-SMS carrier gateways (sent through Resend)
+"""
+
+import json
+import logging
+import os
+import ssl
+from urllib.request import Request, urlopen
+
+log = logging.getLogger(__name__)
+
+# Reuse the SSL context from tracker
+try:
+    from tracker import _SSL_CTX
+except Exception:
+    _SSL_CTX = ssl._create_unverified_context()
+
+# ---------------------------------------------------------------------------
+# Carrier gateways for email-to-SMS
+# ---------------------------------------------------------------------------
+
+CARRIER_GATEWAYS = {
+    "verizon": "@vtext.com",
+    "att": "@txt.att.net",
+    "tmobile": "@tmomail.net",
+    "sprint": "@messaging.sprintpcs.com",
+}
+
+
+def _build_message(permit_name: str, slots: list) -> str:
+    """Build a human-readable message from available slots."""
+    lines = [f"Permit: {permit_name}", ""]
+    for s in slots:
+        lines.append(
+            f"  {s['date']} - {s['division_name']}: "
+            f"{s['remaining']}/{s['total']} spots"
+        )
+    if slots:
+        lines.append("")
+        lines.append(
+            f"Book now: https://www.recreation.gov/permits/{slots[0]['permit_id']}"
+        )
+    return "\n".join(lines)
+
+
+def _build_sms_message(permit_name: str, slots: list) -> str:
+    """Build a short SMS-friendly message."""
+    count = len(slots)
+    dates = ", ".join(s["date"] for s in slots[:3])
+    if count > 3:
+        dates += f" +{count - 3} more"
+    pid = slots[0]["permit_id"] if slots else ""
+    return (
+        f"Permit available: {permit_name}\n"
+        f"{dates}\n"
+        f"https://www.recreation.gov/permits/{pid}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Resend email
+# ---------------------------------------------------------------------------
+
+def send_email(to_email: str, permit_name: str, slots: list) -> bool:
+    """Send an email notification via Resend API."""
+    api_key = os.environ.get("RESEND_API_KEY")
+    if not api_key:
+        log.warning("RESEND_API_KEY not set — skipping email to %s", to_email)
+        return False
+
+    body = _build_message(permit_name, slots)
+    payload = json.dumps(
+        {
+            "from": "Permit Tracker <onboarding@resend.dev>",
+            "to": [to_email],
+            "subject": f"Permit Available: {permit_name}",
+            "text": body,
+        }
+    ).encode()
+
+    req = Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+            log.info("Email sent to %s (status %s)", to_email, resp.status)
+            return True
+    except Exception as e:
+        log.error("Failed to send email to %s: %s", to_email, e)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# ntfy.sh push notification
+# ---------------------------------------------------------------------------
+
+def send_ntfy(topic: str, permit_name: str, slots: list) -> bool:
+    """Send a push notification via ntfy.sh."""
+    if not topic:
+        return False
+
+    body = _build_message(permit_name, slots)
+    url = f"https://ntfy.sh/{topic}"
+    req = Request(
+        url,
+        data=body.encode(),
+        headers={
+            "Title": f"Permit Available: {permit_name}",
+            "Priority": "high",
+            "Tags": "national-park,hiking",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+            log.info("ntfy sent to topic '%s' (status %s)", topic, resp.status)
+            return True
+    except Exception as e:
+        log.error("Failed to send ntfy to '%s': %s", topic, e)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Email-to-SMS
+# ---------------------------------------------------------------------------
+
+def send_sms(phone: str, carrier: str, permit_name: str, slots: list) -> bool:
+    """Send SMS via email-to-SMS gateway using Resend."""
+    gateway = CARRIER_GATEWAYS.get(carrier)
+    if not gateway:
+        log.error("Unknown carrier: %s", carrier)
+        return False
+
+    # Strip non-digits from phone
+    clean_phone = "".join(c for c in phone if c.isdigit())
+    if len(clean_phone) != 10:
+        log.error("Phone number must be 10 digits, got: %s", phone)
+        return False
+
+    sms_email = f"{clean_phone}{gateway}"
+    body = _build_sms_message(permit_name, slots)
+
+    api_key = os.environ.get("RESEND_API_KEY")
+    if not api_key:
+        log.warning("RESEND_API_KEY not set — skipping SMS to %s", sms_email)
+        return False
+
+    payload = json.dumps(
+        {
+            "from": "Permit Tracker <onboarding@resend.dev>",
+            "to": [sms_email],
+            "subject": "Permit Alert",
+            "text": body,
+        }
+    ).encode()
+
+    req = Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+            log.info("SMS sent to %s (status %s)", sms_email, resp.status)
+            return True
+    except Exception as e:
+        log.error("Failed to send SMS to %s: %s", sms_email, e)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Dispatch — send all configured notifications for a tracker
+# ---------------------------------------------------------------------------
+
+def send_all_notifications(tracker_config: dict, permit_name: str, slots: list) -> list:
+    """
+    Send notifications based on tracker configuration.
+
+    tracker_config should have keys like:
+        notify_email, notify_ntfy_topic, notify_sms_phone, notify_sms_carrier
+
+    Returns list of result dicts.
+    """
+    results = []
+
+    email = tracker_config.get("notify_email")
+    if email:
+        ok = send_email(email, permit_name, slots)
+        results.append({"type": "email", "target": email, "success": ok})
+
+    ntfy_topic = tracker_config.get("notify_ntfy_topic")
+    if ntfy_topic:
+        ok = send_ntfy(ntfy_topic, permit_name, slots)
+        results.append({"type": "ntfy", "target": ntfy_topic, "success": ok})
+
+    phone = tracker_config.get("notify_sms_phone")
+    carrier = tracker_config.get("notify_sms_carrier")
+    if phone and carrier:
+        ok = send_sms(phone, carrier, permit_name, slots)
+        results.append({"type": "sms", "target": phone, "success": ok})
+
+    return results

@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Permit Tracker</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <h1>Permit Tracker</h1>
+    <p class="subtitle">Recreation.gov permit availability alerts</p>
+  </div>
+</header>
+
+<main class="container">
+
+  <!-- ============================================================ -->
+  <!-- Step 1: Search -->
+  <!-- ============================================================ -->
+  <section class="card" id="search-section">
+    <h2>1. Find a Permit</h2>
+    <div class="search-bar">
+      <input type="text" id="search-input" placeholder="e.g. Half Dome, Enchantments, Whitney..."
+             autocomplete="off">
+      <button id="search-btn" onclick="doSearch()">Search</button>
+    </div>
+    <div id="search-results" class="results-list hidden"></div>
+    <div id="search-loading" class="loading hidden">Searching...</div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- Step 2: Configure -->
+  <!-- ============================================================ -->
+  <section class="card hidden" id="config-section">
+    <h2>2. Configure Tracking</h2>
+
+    <div class="selected-permit" id="selected-permit-info"></div>
+
+    <div class="form-group">
+      <label>Divisions / Entry Points</label>
+      <p class="hint">Select which divisions to track (leave all unchecked to track all)</p>
+      <div id="divisions-list" class="divisions-grid"></div>
+      <div id="divisions-loading" class="loading hidden">Loading divisions...</div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="start-date">Start Date</label>
+        <input type="date" id="start-date">
+      </div>
+      <div class="form-group">
+        <label for="end-date">End Date</label>
+        <input type="date" id="end-date">
+      </div>
+    </div>
+
+    <h3>Notifications</h3>
+    <p class="hint">Set up at least one notification method</p>
+
+    <div class="form-group">
+      <label for="notify-email">Email (via Resend)</label>
+      <input type="email" id="notify-email" placeholder="you@example.com">
+    </div>
+
+    <div class="form-group">
+      <label for="notify-ntfy">ntfy.sh Topic</label>
+      <div class="input-with-hint">
+        <input type="text" id="notify-ntfy" placeholder="my-permit-alerts">
+        <span class="hint">Install <a href="https://ntfy.sh" target="_blank">ntfy app</a> and subscribe to this topic</span>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="notify-phone">Phone (SMS)</label>
+        <input type="tel" id="notify-phone" placeholder="5551234567">
+      </div>
+      <div class="form-group">
+        <label for="notify-carrier">Carrier</label>
+        <select id="notify-carrier">
+          <option value="">-- Select --</option>
+          <option value="verizon">Verizon</option>
+          <option value="att">AT&T</option>
+          <option value="tmobile">T-Mobile</option>
+          <option value="sprint">Sprint</option>
+        </select>
+      </div>
+    </div>
+
+    <button class="btn-primary" onclick="createTracker()">Start Tracking</button>
+    <button class="btn-secondary" onclick="resetConfig()">Back to Search</button>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- Active Trackers -->
+  <!-- ============================================================ -->
+  <section class="card" id="trackers-section">
+    <h2>Active Trackers</h2>
+    <div id="trackers-list">
+      <p class="empty-state">No trackers yet. Search for a permit above to get started.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- Alert History -->
+  <!-- ============================================================ -->
+  <section class="card" id="alerts-section">
+    <h2>Recent Alerts</h2>
+    <div id="alerts-list">
+      <p class="empty-state">No alerts yet. Alerts will appear here when availability is found.</p>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="container">
+    <p>Checks recreation.gov every 10 minutes &bull; Data from <a href="https://www.recreation.gov" target="_blank">recreation.gov</a></p>
+  </div>
+</footer>
+
+<script>
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let selectedPermit = null;  // {id, name, location}
+let permitDivisions = {};   // {id: {id, name, type}}
+
+// ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+const searchInput = document.getElementById('search-input');
+searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+async function doSearch() {
+  const q = searchInput.value.trim();
+  if (!q) return;
+
+  const resultsEl = document.getElementById('search-results');
+  const loadingEl = document.getElementById('search-loading');
+  resultsEl.classList.add('hidden');
+  loadingEl.classList.remove('hidden');
+
+  try {
+    const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const data = await resp.json();
+    loadingEl.classList.add('hidden');
+
+    if (data.error) {
+      resultsEl.innerHTML = `<p class="error">${data.error}</p>`;
+      resultsEl.classList.remove('hidden');
+      return;
+    }
+
+    if (data.length === 0) {
+      resultsEl.innerHTML = '<p class="empty-state">No permits found. Try a different search.</p>';
+      resultsEl.classList.remove('hidden');
+      return;
+    }
+
+    resultsEl.innerHTML = data.map(p => `
+      <div class="result-item" onclick="selectPermit('${p.id}', '${esc(p.name)}', '${esc(p.location)}')">
+        <div class="result-name">${esc(p.name)}</div>
+        <div class="result-location">${esc(p.location)}</div>
+        <div class="result-id">ID: ${p.id}</div>
+      </div>
+    `).join('');
+    resultsEl.classList.remove('hidden');
+  } catch (err) {
+    loadingEl.classList.add('hidden');
+    resultsEl.innerHTML = `<p class="error">Search failed: ${err.message}</p>`;
+    resultsEl.classList.remove('hidden');
+  }
+}
+
+function esc(str) {
+  const d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}
+
+// ---------------------------------------------------------------------------
+// Select permit and load divisions
+// ---------------------------------------------------------------------------
+async function selectPermit(id, name, location) {
+  selectedPermit = { id, name, location };
+
+  document.getElementById('selected-permit-info').innerHTML = `
+    <strong>${esc(name)}</strong>
+    <span class="permit-location">${esc(location)}</span>
+    <span class="permit-id">ID: ${id}</span>
+  `;
+
+  document.getElementById('config-section').classList.remove('hidden');
+  document.getElementById('search-section').classList.add('hidden');
+
+  // Set default dates (next month span)
+  const today = new Date();
+  const start = new Date(today);
+  start.setDate(start.getDate() + 7);
+  const end = new Date(start);
+  end.setMonth(end.getMonth() + 2);
+  document.getElementById('start-date').value = isoDate(start);
+  document.getElementById('end-date').value = isoDate(end);
+
+  // Load divisions
+  const divList = document.getElementById('divisions-list');
+  const divLoading = document.getElementById('divisions-loading');
+  divList.innerHTML = '';
+  divLoading.classList.remove('hidden');
+
+  try {
+    const resp = await fetch(`/api/permits/${id}`);
+    const data = await resp.json();
+    divLoading.classList.add('hidden');
+
+    if (data.error) {
+      divList.innerHTML = `<p class="error">${data.error}</p>`;
+      return;
+    }
+
+    permitDivisions = data.divisions || {};
+    const divs = Object.values(permitDivisions).sort((a, b) => a.name.localeCompare(b.name));
+
+    if (divs.length === 0) {
+      divList.innerHTML = '<p class="hint">No divisions found for this permit.</p>';
+      return;
+    }
+
+    divList.innerHTML = divs.map(d => `
+      <label class="division-item">
+        <input type="checkbox" value="${d.id}" class="div-checkbox">
+        <span class="div-name">${esc(d.name)}</span>
+        <span class="div-type">${esc(d.type)}</span>
+      </label>
+    `).join('');
+  } catch (err) {
+    divLoading.classList.add('hidden');
+    divList.innerHTML = `<p class="error">Failed to load divisions: ${err.message}</p>`;
+  }
+}
+
+function isoDate(d) {
+  return d.toISOString().split('T')[0];
+}
+
+function resetConfig() {
+  selectedPermit = null;
+  permitDivisions = {};
+  document.getElementById('config-section').classList.add('hidden');
+  document.getElementById('search-section').classList.remove('hidden');
+  // Clear form
+  document.getElementById('notify-email').value = '';
+  document.getElementById('notify-ntfy').value = '';
+  document.getElementById('notify-phone').value = '';
+  document.getElementById('notify-carrier').value = '';
+}
+
+// ---------------------------------------------------------------------------
+// Create tracker
+// ---------------------------------------------------------------------------
+async function createTracker() {
+  if (!selectedPermit) return;
+
+  const startDate = document.getElementById('start-date').value;
+  const endDate = document.getElementById('end-date').value;
+  if (!startDate || !endDate) {
+    alert('Please select a date range.');
+    return;
+  }
+
+  const email = document.getElementById('notify-email').value.trim();
+  const ntfy = document.getElementById('notify-ntfy').value.trim();
+  const phone = document.getElementById('notify-phone').value.trim();
+  const carrier = document.getElementById('notify-carrier').value;
+
+  if (!email && !ntfy && !(phone && carrier)) {
+    alert('Please set up at least one notification method.');
+    return;
+  }
+
+  // Collect selected divisions
+  const checkedDivs = [...document.querySelectorAll('.div-checkbox:checked')].map(cb => cb.value);
+
+  const body = {
+    permit_id: selectedPermit.id,
+    permit_name: selectedPermit.name,
+    division_ids: checkedDivs,
+    start_date: startDate,
+    end_date: endDate,
+    notify_email: email,
+    notify_ntfy_topic: ntfy,
+    notify_sms_phone: phone,
+    notify_sms_carrier: carrier,
+  };
+
+  try {
+    const resp = await fetch('/api/trackers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      alert('Error: ' + data.error);
+      return;
+    }
+
+    resetConfig();
+    loadTrackers();
+  } catch (err) {
+    alert('Failed to create tracker: ' + err.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Load trackers
+// ---------------------------------------------------------------------------
+async function loadTrackers() {
+  try {
+    const resp = await fetch('/api/trackers');
+    const trackers = await resp.json();
+    const el = document.getElementById('trackers-list');
+
+    if (trackers.length === 0) {
+      el.innerHTML = '<p class="empty-state">No trackers yet. Search for a permit above to get started.</p>';
+      return;
+    }
+
+    el.innerHTML = trackers.map(t => {
+      const divText = t.division_ids.length > 0
+        ? `${t.division_ids.length} division(s)`
+        : 'All divisions';
+      const statusClass = t.active ? 'status-active' : 'status-paused';
+      const statusText = t.active ? 'Active' : 'Paused';
+      const lastChecked = t.last_checked_at
+        ? `Last checked: ${formatDate(t.last_checked_at)}`
+        : 'Not checked yet';
+
+      let notifIcons = '';
+      if (t.notify_email) notifIcons += '<span class="notif-badge" title="Email">Email</span>';
+      if (t.notify_ntfy_topic) notifIcons += '<span class="notif-badge" title="ntfy push">Push</span>';
+      if (t.notify_sms_phone) notifIcons += '<span class="notif-badge" title="SMS">SMS</span>';
+
+      return `
+        <div class="tracker-card">
+          <div class="tracker-header">
+            <div>
+              <div class="tracker-name">${esc(t.permit_name)}</div>
+              <div class="tracker-meta">
+                ${t.start_date} to ${t.end_date} &bull; ${divText}
+              </div>
+            </div>
+            <span class="status-badge ${statusClass}">${statusText}</span>
+          </div>
+          <div class="tracker-details">
+            <span class="tracker-checked">${lastChecked}</span>
+            <span class="notif-icons">${notifIcons}</span>
+          </div>
+          <div class="tracker-actions">
+            <button class="btn-sm btn-check" onclick="checkNow(${t.id})">Check Now</button>
+            <button class="btn-sm btn-toggle" onclick="toggleTracker(${t.id})">${t.active ? 'Pause' : 'Resume'}</button>
+            <button class="btn-sm btn-delete" onclick="deleteTracker(${t.id})">Delete</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (err) {
+    console.error('Failed to load trackers:', err);
+  }
+}
+
+async function toggleTracker(id) {
+  await fetch(`/api/trackers/${id}/toggle`, { method: 'POST' });
+  loadTrackers();
+}
+
+async function deleteTracker(id) {
+  if (!confirm('Delete this tracker? This cannot be undone.')) return;
+  await fetch(`/api/trackers/${id}`, { method: 'DELETE' });
+  loadTrackers();
+  loadAlerts();
+}
+
+async function checkNow(id) {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Checking...';
+
+  try {
+    const resp = await fetch(`/api/trackers/${id}/check`, { method: 'POST' });
+    const data = await resp.json();
+
+    if (data.slots && data.slots.length > 0) {
+      alert(`Found ${data.slots.length} available slot(s)! Check the availability details.`);
+    } else {
+      alert('No availability found right now.');
+    }
+    loadTrackers();
+  } catch (err) {
+    alert('Check failed: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Check Now';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Load alerts
+// ---------------------------------------------------------------------------
+async function loadAlerts() {
+  try {
+    const resp = await fetch('/api/alerts?limit=20');
+    const alerts = await resp.json();
+    const el = document.getElementById('alerts-list');
+
+    if (alerts.length === 0) {
+      el.innerHTML = '<p class="empty-state">No alerts yet. Alerts will appear here when availability is found.</p>';
+      return;
+    }
+
+    el.innerHTML = alerts.map(a => {
+      const slots = a.slots || [];
+      const slotLines = slots.map(s =>
+        `<div class="alert-slot">
+          <span class="slot-date">${esc(s.date)}</span>
+          <span class="slot-division">${esc(s.division_name)}</span>
+          <span class="slot-count ${s.remaining > 0 ? 'available' : ''}">${s.remaining}/${s.total}</span>
+        </div>`
+      ).join('');
+
+      const notifResults = (a.notification_results || []).map(r =>
+        `<span class="notif-result ${r.success ? 'notif-ok' : 'notif-fail'}">${r.type}: ${r.success ? 'sent' : 'failed'}</span>`
+      ).join('');
+
+      return `
+        <div class="alert-card">
+          <div class="alert-header">
+            <strong>${esc(a.permit_name)}</strong>
+            <span class="alert-time">${formatDate(a.created_at)}</span>
+          </div>
+          <div class="alert-slots">${slotLines}</div>
+          <div class="alert-notifs">${notifResults}</div>
+        </div>
+      `;
+    }).join('');
+  } catch (err) {
+    console.error('Failed to load alerts:', err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr + 'Z');
+    return d.toLocaleString();
+  } catch {
+    return dateStr;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+loadTrackers();
+loadAlerts();
+
+// Auto-refresh every 60 seconds
+setInterval(() => {
+  loadTrackers();
+  loadAlerts();
+}, 60000);
+</script>
+
+</body>
+</html>
