@@ -10,3 +10,5 @@ dist/
 build/
 .DS_Store
 config.json
+cookies.txt
+tracker.db
