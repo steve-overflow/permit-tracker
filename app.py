@@ -145,6 +145,15 @@ def init_db():
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (tracker_id) REFERENCES trackers(id)
         );
+
+        CREATE TABLE IF NOT EXISTS user_preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            notify_email TEXT DEFAULT '',
+            notify_ntfy_topic TEXT DEFAULT '',
+            notify_sms_phone TEXT DEFAULT '',
+            notify_sms_carrier TEXT DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         """
     )
     conn.close()
@@ -450,6 +459,48 @@ def api_check_now(tracker_id):
     db.commit()
 
     return jsonify({"tracker_id": tracker_id, "slots": slots})
+
+
+# ---------------------------------------------------------------------------
+# User Preferences API
+# ---------------------------------------------------------------------------
+
+@app.route("/api/preferences", methods=["GET"])
+@login_required
+def api_get_preferences():
+    """Get saved notification preferences."""
+    db = get_db()
+    row = db.execute("SELECT * FROM user_preferences ORDER BY id DESC LIMIT 1").fetchone()
+    if row:
+        return jsonify({
+            "notify_email": row["notify_email"],
+            "notify_ntfy_topic": row["notify_ntfy_topic"],
+            "notify_sms_phone": row["notify_sms_phone"],
+            "notify_sms_carrier": row["notify_sms_carrier"],
+        })
+    return jsonify({})
+
+
+@app.route("/api/preferences", methods=["POST"])
+@login_required
+def api_save_preferences():
+    """Save notification preferences."""
+    data = request.get_json()
+    db = get_db()
+    # Upsert — delete old, insert new
+    db.execute("DELETE FROM user_preferences")
+    db.execute(
+        """INSERT INTO user_preferences (notify_email, notify_ntfy_topic, notify_sms_phone, notify_sms_carrier)
+           VALUES (?, ?, ?, ?)""",
+        (
+            data.get("notify_email", ""),
+            data.get("notify_ntfy_topic", ""),
+            data.get("notify_sms_phone", ""),
+            data.get("notify_sms_carrier", ""),
+        )
+    )
+    db.commit()
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------

@@ -316,6 +316,7 @@ async function createTracker() {
       return;
     }
 
+    savePreferences();  // Remember notification settings for next time
     resetConfig();
     loadTrackers();
   } catch (err) {
@@ -515,10 +516,40 @@ function formatDate(dateStr) {
 }
 
 // ---------------------------------------------------------------------------
+// User Preferences — auto-fill notification fields
+// ---------------------------------------------------------------------------
+async function loadPreferences() {
+  try {
+    const resp = await fetch('/api/preferences');
+    if (!resp.ok) return;
+    const prefs = await resp.json();
+    if (prefs.notify_email) document.getElementById('notify-email').value = prefs.notify_email;
+    if (prefs.notify_ntfy_topic) document.getElementById('notify-ntfy').value = prefs.notify_ntfy_topic;
+    if (prefs.notify_sms_phone) document.getElementById('notify-sms-phone').value = prefs.notify_sms_phone;
+    if (prefs.notify_sms_carrier) document.getElementById('notify-sms-carrier').value = prefs.notify_sms_carrier;
+  } catch (e) { /* ignore */ }
+}
+
+async function savePreferences() {
+  const email = document.getElementById('notify-email')?.value?.trim() || '';
+  const ntfy = document.getElementById('notify-ntfy')?.value?.trim() || '';
+  const phone = document.getElementById('notify-sms-phone')?.value?.trim() || '';
+  const carrier = document.getElementById('notify-sms-carrier')?.value || '';
+  try {
+    await fetch('/api/preferences', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({notify_email: email, notify_ntfy_topic: ntfy, notify_sms_phone: phone, notify_sms_carrier: carrier})
+    });
+  } catch (e) { /* ignore */ }
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 loadTrackers();
 loadAlerts();
+loadPreferences();
 
 // Auto-refresh every 60 seconds
 setInterval(() => {
