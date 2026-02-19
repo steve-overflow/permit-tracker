@@ -596,6 +596,7 @@ async function loadTrackers() {
             <button class="btn-icon" onclick="toggleTracker(${t.id})" title="${t.active ? 'Pause' : 'Resume'}">${t.active ? ICONS.pause : ICONS.play}</button>
             <button class="btn-icon btn-danger" onclick="deleteTracker(${t.id})" title="Delete">${ICONS.trash}</button>
           </div>
+          <div class="tracker-slots" id="tracker-slots-${t.id}"></div>
         </div>
       `;
     }).join('');
@@ -621,6 +622,7 @@ async function deleteTracker(id) {
 async function checkNow(id, btn) {
   btn.disabled = true;
   btn.classList.add('skeleton');
+  const slotsEl = document.getElementById(`tracker-slots-${id}`);
 
   try {
     const resp = await fetch(`/api/trackers/${id}/check`, { method: 'POST' });
@@ -628,10 +630,32 @@ async function checkNow(id, btn) {
 
     if (data.slots && data.slots.length > 0) {
       showToast('success', 'Availability found!', `${data.slots.length} available slot(s).`);
+
+      // Group slots by division
+      const byDiv = {};
+      data.slots.forEach(s => {
+        const key = s.division_name || 'General';
+        if (!byDiv[key]) byDiv[key] = [];
+        byDiv[key].push(s);
+      });
+
+      let html = '<div class="slots-detail"><div class="slots-header">📋 Current Availability</div>';
+      for (const [div, slots] of Object.entries(byDiv).sort()) {
+        html += `<div class="slot-division-name">${esc(div)}</div>`;
+        html += '<div class="slot-list">';
+        slots.slice(0, 10).forEach(s => {
+          html += `<div class="slot-row"><span class="slot-date">${esc(s.date)}</span><span class="slot-count available">${s.remaining}/${s.total}</span></div>`;
+        });
+        if (slots.length > 10) html += `<div class="slot-row"><span class="slot-date">... and ${slots.length - 10} more dates</span></div>`;
+        html += '</div>';
+      }
+      html += '</div>';
+      if (slotsEl) { slotsEl.innerHTML = html; slotsEl.style.display = 'block'; }
     } else {
       showToast('info', 'No availability', 'Nothing open right now.');
+      if (slotsEl) { slotsEl.innerHTML = '<div class="slots-detail"><div class="slots-header">No availability right now</div></div>'; slotsEl.style.display = 'block'; }
     }
-    loadTrackers();
+    // Don't call loadTrackers() here — it would wipe the slots we just rendered
   } catch (err) {
     showToast('error', 'Check failed', err.message);
   } finally {

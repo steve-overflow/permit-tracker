@@ -687,10 +687,10 @@ def send_daily_checkin():
                 f"*Last 24 hours:*\n"
                 f"🔍 ~{expected_checks_per_day} checks performed\n"
                 f"📋 {tracker_count} active tracker{'s' if tracker_count != 1 else ''}"
-                f"{f' \\+ {paused_count} paused' if paused_count else ''}\n"
-                f"🔔 {alerts_24h} alert{'s' if alerts_24h != 1 else ''} sent"
-                f"{f' \\({total_slots_found} slot{\"s\" if total_slots_found != 1 else \"\"}\\)' if total_slots_found else ''}\n\n"
-                f"*Trackers:*\n{_md2_escape(tracker_summary)}\n\n"
+                + (_md2_escape(f" + {paused_count} paused") if paused_count else "") +
+                f"\n🔔 {alerts_24h} alert{'s' if alerts_24h != 1 else ''} sent"
+                + (_md2_escape(f" ({total_slots_found} slots)") if total_slots_found else "") +
+                f"\n\n*Trackers:*\n{_md2_escape(tracker_summary)}\n\n"
                 f"🕐 {_md2_escape(now)}"
             )
             payload = _json.dumps({

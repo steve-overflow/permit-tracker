@@ -1199,3 +1199,38 @@ footer p { margin: 0; }
   white-space: nowrap;
   border: 0;
 }
+
+/* Inline slot details (Check Now results) */
+.tracker-slots { display: none; }
+.slots-detail {
+  margin-top: var(--s3);
+  padding: var(--s3);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-size: 0.82rem;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.slots-header {
+  font-weight: 600;
+  margin-bottom: var(--s2);
+  color: var(--text);
+}
+.slot-division-name {
+  font-weight: 600;
+  font-size: 0.78rem;
+  color: var(--accent);
+  margin-top: var(--s2);
+  margin-bottom: var(--s1);
+}
+.slot-list { display: flex; flex-direction: column; gap: 2px; }
+.slot-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2px 0;
+}
+.slot-date { color: var(--muted); }
+.slot-count { font-weight: 600; }
+.slot-count.available { color: var(--green); }

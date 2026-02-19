@@ -868,7 +868,8 @@ def _show_divisions_for_permit(chat_id, permit, start_date, end_date, selected_p
 
     lines = [f"🏔️ <b>{permit['name']}</b> has {len(div_list)} sites/zones:\n"]
     for i, d in enumerate(div_list, 1):
-        lines.append(f"{i}. {d.get('name', f'Division {d[\"id\"]}')}")
+        div_name = d.get('name') or f"Division {d['id']}"
+        lines.append(f"{i}. {div_name}")
 
     lines.append(f"\nReply: \"<b>all</b>\" to track all sites, pick specific ones like \"<b>1, 3, 5</b>\", or \"<b>skip</b>\"")
 
