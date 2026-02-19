@@ -25,7 +25,7 @@ from urllib.request import Request, urlopen
 
 import re
 
-from tracker import get_permit_info, search_permits, check_availability, _SSL_CTX
+from tracker import get_permit_info, search_permits, check_availability, find_available_slots, _SSL_CTX
 
 logging.basicConfig(
     level=logging.INFO,
@@ -259,7 +259,7 @@ def handle_track(chat_id, user_id, args):
             f"🔔 Notifications: Telegram (this chat)\n"
             f"🆔 Tracker ID: {tracker_id}"
             f"{div_text}\n\n"
-            f"I'll check every 10 minutes and message you here when spots open up!"
+            f"I'll check every 20 minutes and message you here when spots open up!"
         )
     except Exception as e:
         send_message(chat_id, f"❌ Failed to set up tracking: {e}")
@@ -589,8 +589,47 @@ def handle_natural_language(chat_id, user_id, first_name, text):
     )
 
 
+def _check_and_format_availability(permit_id, permit_name, start_date, end_date):
+    """Check availability for a permit and return a formatted message + slot count."""
+    try:
+        slots = find_available_slots(permit_id, start_date, end_date)
+    except Exception as e:
+        return f"⚠️ Couldn't check availability: {e}", 0
+
+    if not slots:
+        return "📭 No availability right now — but spots open up as people cancel!", 0
+
+    # Group by division for cleaner display
+    by_div = {}
+    for s in slots:
+        div = s["division_name"]
+        if div not in by_div:
+            by_div[div] = []
+        by_div[div].append(s)
+
+    lines = [f"📋 <b>{len(slots)} available slot(s) found:</b>\n"]
+    shown = 0
+    for div, div_slots in sorted(by_div.items()):
+        if shown >= 15:
+            lines.append(f"\n<i>...and more across other divisions</i>")
+            break
+        lines.append(f"\n🏔️ <b>{div}</b>")
+        for s in div_slots[:5]:
+            lines.append(f"   📅 {s['date']} — {s['remaining']}/{s['total']} spots")
+            shown += 1
+        if len(div_slots) > 5:
+            lines.append(f"   <i>...+{len(div_slots) - 5} more dates</i>")
+            shown += 1
+
+    if slots:
+        pid = slots[0]["permit_id"]
+        lines.append(f"\n🔗 <a href='https://www.recreation.gov/permits/{pid}'>Book on recreation.gov</a>")
+
+    return "\n".join(lines), len(slots)
+
+
 def handle_search_and_maybe_track(chat_id, user_id, query, original_text):
-    """Search for a permit and show numbered results for conversational selection."""
+    """Search for a permit, show availability, then offer to track."""
     # Clear any old conversation state
     _clear_conv_state(chat_id)
 
@@ -613,29 +652,53 @@ def handle_search_and_maybe_track(chat_id, user_id, query, original_text):
     results = results[:10]
 
     if len(results) == 1:
-        # Single result — store as conversation state for "yes"/"all"/"1" selection
+        # Single result — show availability immediately
         r = results[0]
-        _store_conv_state(chat_id, results, start_date, end_date)
-        send_message(chat_id,
-            f"Found 1 permit:\n\n"
-            f"1. <b>{r['name']}</b>\n"
-            f"   📍 {r.get('location', 'Unknown location')}\n"
-            f"   ID: <code>{r['id']}</code>\n\n"
-            f"📅 Dates: {date_desc} ({start_date} → {end_date})\n\n"
-            f"Reply: <b>yes</b> to track it, or <b>cancel</b> to skip"
-        )
-    else:
-        # Multiple results — show numbered list and store state
-        _store_conv_state(chat_id, results, start_date, end_date)
+        send_message(chat_id, f"Found: <b>{r['name']}</b>\n📍 {r.get('location', '')}\n📅 Checking {date_desc}...")
 
+        avail_msg, slot_count = _check_and_format_availability(r['id'], r['name'], start_date, end_date)
+        send_message(chat_id, avail_msg, parse_mode="HTML")
+
+        # Store state and offer tracking
+        _store_conv_state(chat_id, results, start_date, end_date)
+        if slot_count > 0:
+            send_message(chat_id,
+                f"Want me to <b>track this permit</b> and notify you when new spots open?\n\n"
+                f"Reply <b>yes</b> to start tracking, or <b>no</b> to skip.")
+        else:
+            send_message(chat_id,
+                f"Want me to <b>track this permit</b> and notify you the moment spots open up?\n\n"
+                f"Reply <b>yes</b> to start tracking, or <b>no</b> to skip.")
+    else:
+        # Multiple results — show numbered list with brief availability check for top 3
         lines = [f"Found {len(results)} permit(s):\n"]
         for i, r in enumerate(results, 1):
             loc = f" — 📍 {r['location']}" if r.get('location') else ""
-            lines.append(f"{i}. <b>{r['name']}</b>{loc}\n   ID: <code>{r['id']}</code>")
+            lines.append(f"{i}. <b>{r['name']}</b>{loc}")
 
-        lines.append(f"\n📅 Dates: {date_desc} ({start_date} → {end_date})")
-        lines.append(f"\nReply: \"<b>all</b>\" to track everything, \"<b>1 and 3</b>\", \"<b>just 2</b>\", or \"<b>cancel</b>\"")
-        send_message(chat_id, "\n".join(lines))
+        # Quick availability check for top 3
+        send_message(chat_id, "\n".join(lines) + f"\n\n📅 Dates: {date_desc}\n⏳ Checking availability...")
+
+        avail_lines = []
+        for i, r in enumerate(results[:3], 1):
+            try:
+                slots = find_available_slots(r['id'], start_date, end_date)
+                if slots:
+                    avail_lines.append(f"✅ <b>{i}. {r['name']}</b> — {len(slots)} slot(s) available!")
+                else:
+                    avail_lines.append(f"📭 <b>{i}. {r['name']}</b> — no availability right now")
+            except Exception:
+                avail_lines.append(f"⚠️ <b>{i}. {r['name']}</b> — couldn't check")
+
+        if len(results) > 3:
+            avail_lines.append(f"\n<i>(checked top 3 of {len(results)} — select a number to see more details)</i>")
+
+        # Store state for selection
+        _store_conv_state(chat_id, results, start_date, end_date)
+
+        avail_lines.append(f"\nReply: \"<b>all</b>\" to track everything, \"<b>1 and 3</b>\", \"<b>just 2</b>\", or \"<b>cancel</b>\"")
+        avail_lines.append(f"Or reply a number like \"<b>show 1</b>\" to see full availability details.")
+        send_message(chat_id, "\n".join(avail_lines))
 
 
 # Pending actions (simple in-memory store for "yes" confirmations)
@@ -796,6 +859,24 @@ def handle_selection(chat_id, user_id, text):
     results = state["results"]
     start_date = state["date_range"]["start"]
     end_date = state["date_range"]["end"]
+    lower = text.lower().strip()
+
+    # Handle "show N" / "details N" — show full availability without consuming state
+    import re
+    show_match = re.match(r'(?:show|details?|info|more)\s+(\d+)', lower)
+    if show_match:
+        idx = int(show_match.group(1)) - 1
+        if 0 <= idx < len(results):
+            r = results[idx]
+            send_message(chat_id, f"🔍 Checking availability for <b>{r['name']}</b>...")
+            avail_msg, slot_count = _check_and_format_availability(r['id'], r['name'], start_date, end_date)
+            send_message(chat_id, avail_msg, parse_mode="HTML")
+            send_message(chat_id,
+                f"Reply a number to track it, \"<b>all</b>\" for everything, or \"<b>cancel</b>\"")
+            return True  # Don't clear state — let them still select
+        else:
+            send_message(chat_id, f"Invalid number. Pick 1-{len(results)}.")
+            return True
 
     selection = parse_selection(text, len(results))
 
@@ -833,7 +914,7 @@ def handle_selection(chat_id, user_id, text):
             f"{names_text}\n\n"
             f"📅 {start_date} → {end_date}\n"
             f"🔔 You'll get a Telegram notification here when spots open up.\n"
-            f"Checking every 10 minutes!"
+            f"Checking every 20 minutes!"
         )
     return True
 
