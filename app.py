@@ -463,6 +463,20 @@ scheduler.add_job(poll_all_trackers, "interval", minutes=10, id="poller", max_in
 scheduler.start()
 log.info("Background scheduler started — polling every 10 minutes")
 
+# Start Telegram bot in background thread if token is set
+_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+if _bot_token:
+    import threading
+    def _run_bot():
+        try:
+            from bot import run_polling
+            run_polling()
+        except Exception as e:
+            log.error("Telegram bot failed: %s", e)
+    _bot_thread = threading.Thread(target=_run_bot, daemon=True)
+    _bot_thread.start()
+    log.info("Telegram bot started in background thread")
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
