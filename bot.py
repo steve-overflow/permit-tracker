@@ -132,6 +132,7 @@ def handle_help(chat_id):
 /check &lt;tracker_id&gt; — Run immediate check
 /checkall — Check all trackers now
 /stop &lt;tracker_id&gt; — Stop tracking
+/report &lt;issue&gt; — Report a bug or request a feature
 /help — Show this message
 
 <b>Examples:</b>
@@ -322,6 +323,41 @@ def handle_stop(chat_id, args):
         send_message(chat_id, f"❌ Tracker #{tracker_id} not found.")
 
 
+def handle_report(chat_id, user_id, first_name, args):
+    """Save a bug report/feature request to a file for the dev to review."""
+    if not args.strip():
+        send_message(chat_id, "Usage: /report <describe the issue>\n\nExample: /report Maroon Bells search isn't showing any results")
+        return
+
+    report = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "user_id": user_id,
+        "user_name": first_name,
+        "chat_id": chat_id,
+        "message": args.strip()
+    }
+
+    # Append to reports file
+    reports_file = "reports.json"
+    try:
+        with open(reports_file) as f:
+            reports = json.load(f)
+    except Exception:
+        reports = []
+
+    reports.append(report)
+    with open(reports_file, "w") as f:
+        json.dump(reports, f, indent=2)
+
+    log.info("Bug report from %s: %s", first_name, args.strip())
+    send_message(chat_id,
+        f"✅ <b>Report received!</b>\n\n"
+        f"Your message has been logged and the developer will be notified. "
+        f"They can usually fix and redeploy within minutes.\n\n"
+        f"<i>You reported: {args.strip()}</i>"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main polling loop
 # ---------------------------------------------------------------------------
@@ -369,6 +405,8 @@ def process_update(update):
             handle_check(chat_id, "")
         elif command == "/stop":
             handle_stop(chat_id, args)
+        elif command == "/report":
+            handle_report(chat_id, user_id, first_name, args)
         else:
             send_message(chat_id, f"Unknown command: {command}\n\nUse /help to see available commands.")
     else:
