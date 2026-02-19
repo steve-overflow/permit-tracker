@@ -33,7 +33,11 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 
 ACCESS_CODE = os.environ.get("ACCESS_CODE", "")
-DB_PATH = os.environ.get("DB_PATH", "tracker.db")
+
+# Use /data/tracker.db on Railway (persistent volume) if /data exists,
+# otherwise fall back to local ./tracker.db for development.
+_default_db = "/data/tracker.db" if os.path.isdir("/data") else "tracker.db"
+DB_PATH = os.environ.get("DB_PATH", _default_db)
 
 # Cache-busting version (changes on each app restart)
 import time
@@ -322,15 +326,19 @@ def api_availability(permit_id):
 @app.route("/api/trackers", methods=["GET"])
 @login_required
 def api_list_trackers():
-    """List all trackers."""
+    """List all trackers with alert counts."""
     db = get_db()
     rows = db.execute(
         "SELECT * FROM trackers ORDER BY created_at DESC"
     ).fetchall()
     trackers = [dict(r) for r in rows]
-    # Parse division_ids back to list
     for t in trackers:
         t["division_ids"] = json.loads(t["division_ids"])
+        # Count alerts sent for this tracker
+        count_row = db.execute(
+            "SELECT COUNT(*) as cnt FROM alerts WHERE tracker_id = ?", (t["id"],)
+        ).fetchone()
+        t["alert_count"] = count_row["cnt"] if count_row else 0
     return jsonify(trackers)
 
 
@@ -435,6 +443,29 @@ def api_test_notification():
         sms_carrier=data.get("sms_carrier", ""),
     )
     return jsonify(result)
+
+
+@app.route("/api/trackers/<int:tracker_id>/test-notifications", methods=["POST"])
+@login_required
+def api_test_all_notifications(tracker_id):
+    """Send test notifications to all channels configured on a tracker."""
+    db = get_db()
+    row = db.execute("SELECT * FROM trackers WHERE id = ?", (tracker_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Tracker not found"}), 404
+
+    t = dict(row)
+    results = []
+    if t.get("notify_email"):
+        results.append(send_test_notification("email", email=t["notify_email"]))
+    if t.get("notify_ntfy_topic"):
+        results.append(send_test_notification("ntfy", ntfy_topic=t["notify_ntfy_topic"]))
+    if t.get("notify_sms_phone") and t.get("notify_sms_carrier"):
+        results.append(send_test_notification("sms", sms_phone=t["notify_sms_phone"], sms_carrier=t["notify_sms_carrier"]))
+
+    if not results:
+        return jsonify({"error": "No notification channels configured"}), 400
+    return jsonify({"results": results})
 
 
 @app.route("/api/trackers/<int:tracker_id>/check", methods=["POST"])

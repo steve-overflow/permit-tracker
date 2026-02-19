@@ -21,6 +21,14 @@ try:
 except Exception:
     _SSL_CTX = ssl._create_unverified_context()
 
+# Configurable sender address.
+# IMPORTANT: The default onboarding@resend.dev sandbox sender can ONLY deliver
+# to the Resend account owner's verified email address. It CANNOT send to
+# arbitrary addresses or carrier SMS gateways (e.g. 5551234567@vtext.com).
+# To send real emails/SMS, set RESEND_FROM_EMAIL to an address on a verified
+# domain in your Resend account (e.g. "alerts@yourdomain.com").
+RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev")
+
 # ---------------------------------------------------------------------------
 # Carrier gateways for email-to-SMS
 # ---------------------------------------------------------------------------
@@ -77,7 +85,7 @@ def send_email(to_email: str, permit_name: str, slots: list) -> bool:
     body = _build_message(permit_name, slots)
     payload = json.dumps(
         {
-            "from": "Permit Tracker <onboarding@resend.dev>",
+            "from": f"Permit Tracker <{RESEND_FROM_EMAIL}>",
             "to": [to_email],
             "subject": f"Permit Available: {permit_name}",
             "text": body,
@@ -159,7 +167,7 @@ def send_sms(phone: str, carrier: str, permit_name: str, slots: list) -> bool:
 
     payload = json.dumps(
         {
-            "from": "Permit Tracker <onboarding@resend.dev>",
+            "from": f"Permit Tracker <{RESEND_FROM_EMAIL}>",
             "to": [sms_email],
             "subject": "Permit Alert",
             "text": body,

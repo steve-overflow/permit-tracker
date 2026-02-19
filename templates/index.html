@@ -96,13 +96,14 @@
         </div>
       </div>
     </div>
+    <p class="hint sms-warning">SMS requires a verified Resend domain. The default sandbox sender (onboarding@resend.dev) can only email the account owner &mdash; it cannot deliver to carrier SMS gateways.</p>
 
     <button class="btn-primary" onclick="createTracker()">Start Tracking</button>
     <button class="btn-secondary" onclick="resetConfig()">Back to Search</button>
   </section>
 
   <!-- ============================================================ -->
-  <!-- Active Trackers -->
+  <!-- Active Trackers — enhanced dashboard -->
   <!-- ============================================================ -->
   <section class="card" id="trackers-section">
     <h2>Active Trackers</h2>
@@ -129,12 +130,40 @@
   </div>
 </footer>
 
+<!-- ============================================================ -->
+<!-- Chat Interface -->
+<!-- ============================================================ -->
+<div id="chat-widget" class="chat-widget">
+  <button id="chat-toggle" class="chat-toggle" onclick="toggleChat()">
+    <span class="chat-toggle-icon">&#9993;</span>
+    <span class="chat-toggle-text">Chat</span>
+  </button>
+  <div id="chat-panel" class="chat-panel hidden">
+    <div class="chat-header">
+      <span>Permit Assistant</span>
+      <button class="chat-close" onclick="toggleChat()">&times;</button>
+    </div>
+    <div id="chat-messages" class="chat-messages">
+      <div class="chat-msg chat-bot">Hi! I can help you manage trackers. Try:<br>
+        <em>"track Half Dome permits for July"</em><br>
+        <em>"what am I tracking?"</em><br>
+        <em>"delete tracker 3"</em><br>
+        Type <strong>help</strong> for all commands.</div>
+    </div>
+    <div class="chat-input-bar">
+      <input type="text" id="chat-input" placeholder="e.g. track Enchantments for August..." autocomplete="off">
+      <button id="chat-send" onclick="sendChat()">Send</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 let selectedPermit = null;  // {id, name, location}
 let permitDivisions = {};   // {id: {id, name, type}}
+let cachedTrackers = [];    // Store for chat to reference
 
 // ---------------------------------------------------------------------------
 // Search
@@ -259,11 +288,12 @@ function resetConfig() {
   permitDivisions = {};
   document.getElementById('config-section').classList.add('hidden');
   document.getElementById('search-section').classList.remove('hidden');
-  // Clear form
+  // Re-apply saved preferences so they auto-fill for the next tracker
   document.getElementById('notify-email').value = '';
   document.getElementById('notify-ntfy').value = '';
   document.getElementById('notify-phone').value = '';
   document.getElementById('notify-carrier').value = '';
+  applyPreferences();
 }
 
 // ---------------------------------------------------------------------------
@@ -325,12 +355,63 @@ async function createTracker() {
 }
 
 // ---------------------------------------------------------------------------
-// Load trackers
+// Time helpers
+// ---------------------------------------------------------------------------
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr + 'Z');
+    return d.toLocaleString();
+  } catch {
+    return dateStr;
+  }
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return 'Never';
+  const now = new Date();
+  const d = new Date(dateStr + 'Z');
+  const diffMs = now - d;
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) return 'Just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ago`;
+}
+
+function nextCheckIn(lastCheckedAt) {
+  if (!lastCheckedAt) return 'Soon';
+  const last = new Date(lastCheckedAt + 'Z');
+  const next = new Date(last.getTime() + 10 * 60 * 1000); // 10 min interval
+  const now = new Date();
+  const diffMs = next - now;
+  if (diffMs <= 0) return 'Any moment';
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return '<1m';
+  return `~${diffMin}m`;
+}
+
+function getHealthStatus(t) {
+  if (!t.active) return { cls: 'health-paused', label: 'Paused', icon: '&#9646;&#9646;' };
+  if (!t.last_checked_at) return { cls: 'health-waiting', label: 'Waiting for first check', icon: '&#9679;' };
+  const last = new Date(t.last_checked_at + 'Z');
+  const diffMin = (new Date() - last) / 60000;
+  if (diffMin < 15) return { cls: 'health-good', label: 'Checking', icon: '&#9679;' };
+  if (diffMin < 30) return { cls: 'health-stale', label: 'Stale', icon: '&#9679;' };
+  return { cls: 'health-error', label: 'Not checking', icon: '&#9679;' };
+}
+
+// ---------------------------------------------------------------------------
+// Load trackers — enhanced dashboard
 // ---------------------------------------------------------------------------
 async function loadTrackers() {
   try {
     const resp = await fetch('/api/trackers');
     const trackers = await resp.json();
+    cachedTrackers = trackers;
     const el = document.getElementById('trackers-list');
 
     if (trackers.length === 0) {
@@ -342,34 +423,68 @@ async function loadTrackers() {
       const divText = t.division_ids.length > 0
         ? `${t.division_ids.length} division(s)`
         : 'All divisions';
-      const statusClass = t.active ? 'status-active' : 'status-paused';
-      const statusText = t.active ? 'Active' : 'Paused';
-      const lastChecked = t.last_checked_at
-        ? `Last checked: ${formatDate(t.last_checked_at)}`
-        : 'Not checked yet';
+      const health = getHealthStatus(t);
+      const ago = timeAgo(t.last_checked_at);
+      const nextIn = t.active ? nextCheckIn(t.last_checked_at) : '—';
+      const alertCount = t.alert_count || 0;
 
-      let notifIcons = '';
-      if (t.notify_email) notifIcons += '<span class="notif-badge" title="Email">Email</span>';
-      if (t.notify_ntfy_topic) notifIcons += '<span class="notif-badge" title="ntfy push">Push</span>';
-      if (t.notify_sms_phone) notifIcons += '<span class="notif-badge" title="SMS">SMS</span>';
+      // Notification channel badges with status color
+      let channelBadges = '';
+      if (t.notify_email)
+        channelBadges += `<span class="channel-badge channel-on" title="Email: ${esc(t.notify_email)}">Email</span>`;
+      else
+        channelBadges += '<span class="channel-badge channel-off" title="Email not configured">Email</span>';
+      if (t.notify_ntfy_topic)
+        channelBadges += `<span class="channel-badge channel-on" title="ntfy: ${esc(t.notify_ntfy_topic)}">Push</span>`;
+      else
+        channelBadges += '<span class="channel-badge channel-off" title="Push not configured">Push</span>';
+      if (t.notify_sms_phone)
+        channelBadges += `<span class="channel-badge channel-on" title="SMS: ${esc(t.notify_sms_phone)}">SMS</span>`;
+      else
+        channelBadges += '<span class="channel-badge channel-off" title="SMS not configured">SMS</span>';
 
       return `
-        <div class="tracker-card">
+        <div class="tracker-card ${health.cls}">
           <div class="tracker-header">
             <div>
-              <div class="tracker-name">${esc(t.permit_name)}</div>
+              <div class="tracker-name">
+                <span class="health-dot ${health.cls}" title="${health.label}">${health.icon}</span>
+                ${esc(t.permit_name)}
+              </div>
               <div class="tracker-meta">
                 ${t.start_date} to ${t.end_date} &bull; ${divText}
               </div>
             </div>
-            <span class="status-badge ${statusClass}">${statusText}</span>
+            <span class="status-badge ${t.active ? 'status-active' : 'status-paused'}">${t.active ? 'Active' : 'Paused'}</span>
           </div>
-          <div class="tracker-details">
-            <span class="tracker-checked">${lastChecked}</span>
-            <span class="notif-icons">${notifIcons}</span>
+
+          <div class="tracker-stats">
+            <div class="stat">
+              <span class="stat-label">Last checked</span>
+              <span class="stat-value">${ago}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Next check</span>
+              <span class="stat-value">${nextIn}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Alerts sent</span>
+              <span class="stat-value">${alertCount}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Status</span>
+              <span class="stat-value stat-status ${health.cls}">${health.label}</span>
+            </div>
           </div>
+
+          <div class="tracker-channels">
+            <span class="channels-label">Notifications:</span>
+            ${channelBadges}
+          </div>
+
           <div class="tracker-actions">
-            <button class="btn-sm btn-check" onclick="checkNow(${t.id})">Check Now</button>
+            <button class="btn-sm btn-check" onclick="checkNow(${t.id}, this)">Check Now</button>
+            <button class="btn-sm btn-test-all" onclick="testAllNotifications(${t.id}, this)">Test Notifications</button>
             <button class="btn-sm btn-toggle" onclick="toggleTracker(${t.id})">${t.active ? 'Pause' : 'Resume'}</button>
             <button class="btn-sm btn-delete" onclick="deleteTracker(${t.id})">Delete</button>
           </div>
@@ -393,8 +508,7 @@ async function deleteTracker(id) {
   loadAlerts();
 }
 
-async function checkNow(id) {
-  const btn = event.target;
+async function checkNow(id, btn) {
   btn.disabled = true;
   btn.textContent = 'Checking...';
 
@@ -416,8 +530,30 @@ async function checkNow(id) {
   }
 }
 
+async function testAllNotifications(id, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  try {
+    const resp = await fetch(`/api/trackers/${id}/test-notifications`, { method: 'POST' });
+    const data = await resp.json();
+    if (data.error) {
+      alert('Error: ' + data.error);
+    } else {
+      const summary = data.results.map(r =>
+        `${r.type}: ${r.success ? 'sent' : 'FAILED' + (r.error ? ' (' + r.error + ')' : '')}`
+      ).join('\n');
+      alert('Test results:\n' + summary);
+    }
+  } catch (err) {
+    alert('Test failed: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Test Notifications';
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Test notifications
+// Test notifications (config form)
 // ---------------------------------------------------------------------------
 async function testNotification(type) {
   const btn = event.target;
@@ -503,45 +639,277 @@ async function loadAlerts() {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-function formatDate(dateStr) {
-  if (!dateStr) return '';
-  try {
-    const d = new Date(dateStr + 'Z');
-    return d.toLocaleString();
-  } catch {
-    return dateStr;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // User Preferences — auto-fill notification fields
 // ---------------------------------------------------------------------------
+let savedPreferences = {};
+
 async function loadPreferences() {
   try {
     const resp = await fetch('/api/preferences');
     if (!resp.ok) return;
     const prefs = await resp.json();
-    if (prefs.notify_email) document.getElementById('notify-email').value = prefs.notify_email;
-    if (prefs.notify_ntfy_topic) document.getElementById('notify-ntfy').value = prefs.notify_ntfy_topic;
-    if (prefs.notify_sms_phone) document.getElementById('notify-sms-phone').value = prefs.notify_sms_phone;
-    if (prefs.notify_sms_carrier) document.getElementById('notify-sms-carrier').value = prefs.notify_sms_carrier;
+    savedPreferences = prefs;
+    applyPreferences();
   } catch (e) { /* ignore */ }
+}
+
+function applyPreferences() {
+  const p = savedPreferences;
+  if (p.notify_email) document.getElementById('notify-email').value = p.notify_email;
+  if (p.notify_ntfy_topic) document.getElementById('notify-ntfy').value = p.notify_ntfy_topic;
+  if (p.notify_sms_phone) document.getElementById('notify-phone').value = p.notify_sms_phone;
+  if (p.notify_sms_carrier) document.getElementById('notify-carrier').value = p.notify_sms_carrier;
 }
 
 async function savePreferences() {
   const email = document.getElementById('notify-email')?.value?.trim() || '';
   const ntfy = document.getElementById('notify-ntfy')?.value?.trim() || '';
-  const phone = document.getElementById('notify-sms-phone')?.value?.trim() || '';
-  const carrier = document.getElementById('notify-sms-carrier')?.value || '';
+  const phone = document.getElementById('notify-phone')?.value?.trim() || '';
+  const carrier = document.getElementById('notify-carrier')?.value || '';
+  savedPreferences = {notify_email: email, notify_ntfy_topic: ntfy, notify_sms_phone: phone, notify_sms_carrier: carrier};
   try {
     await fetch('/api/preferences', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({notify_email: email, notify_ntfy_topic: ntfy, notify_sms_phone: phone, notify_sms_carrier: carrier})
+      body: JSON.stringify(savedPreferences)
     });
   } catch (e) { /* ignore */ }
+}
+
+// ---------------------------------------------------------------------------
+// Chat interface — natural language command parser
+// ---------------------------------------------------------------------------
+let chatOpen = false;
+
+function toggleChat() {
+  chatOpen = !chatOpen;
+  document.getElementById('chat-panel').classList.toggle('hidden', !chatOpen);
+  if (chatOpen) document.getElementById('chat-input').focus();
+}
+
+const chatInput = document.getElementById('chat-input');
+chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
+
+function addChatMsg(text, isUser) {
+  const el = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = `chat-msg ${isUser ? 'chat-user' : 'chat-bot'}`;
+  div.innerHTML = text;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+// Month name mapping
+const MONTHS = {
+  jan:1, january:1, feb:2, february:2, mar:3, march:3, apr:4, april:4,
+  may:5, jun:6, june:6, jul:7, july:7, aug:8, august:8,
+  sep:9, sept:9, september:9, oct:10, october:10, nov:11, november:11, dec:12, december:12
+};
+const SEASONS = {
+  spring: [3,5], summer: [6,8], fall: [9,11], autumn: [9,11], winter: [12,2]
+};
+
+function parseDateRange(text) {
+  const lower = text.toLowerCase();
+  const now = new Date();
+  let year = now.getFullYear();
+
+  // Check for season
+  for (const [season, [sm, em]] of Object.entries(SEASONS)) {
+    if (lower.includes(season)) {
+      let sy = year, ey = year;
+      if (sm > em) ey++; // winter wraps
+      if (new Date(ey, em, 1) < now) { sy++; ey++; }
+      return { start: `${sy}-${String(sm).padStart(2,'0')}-01`, end: `${ey}-${String(em).padStart(2,'0')}-28` };
+    }
+  }
+
+  // Check for month names
+  const foundMonths = [];
+  for (const [name, num] of Object.entries(MONTHS)) {
+    const re = new RegExp('\\b' + name + '\\b', 'i');
+    if (re.test(lower)) {
+      if (!foundMonths.find(m => m.num === num)) foundMonths.push({ name, num });
+    }
+  }
+  // Deduplicate by number (e.g. "jul" and "july" both map to 7)
+  const uniqueMonths = [];
+  const seen = new Set();
+  for (const m of foundMonths) {
+    if (!seen.has(m.num)) { seen.add(m.num); uniqueMonths.push(m); }
+  }
+
+  if (uniqueMonths.length >= 2) {
+    uniqueMonths.sort((a,b) => a.num - b.num);
+    const sm = uniqueMonths[0].num;
+    const em = uniqueMonths[uniqueMonths.length - 1].num;
+    let sy = year, ey = year;
+    if (new Date(sy, sm - 1, 1) < now) sy++;
+    if (new Date(ey, em - 1, 28) < now) ey++;
+    return { start: `${sy}-${String(sm).padStart(2,'0')}-01`, end: `${ey}-${String(em).padStart(2,'0')}-28` };
+  }
+
+  if (uniqueMonths.length === 1) {
+    const m = uniqueMonths[0].num;
+    let y = year;
+    if (new Date(y, m, 0) < now) y++;
+    const lastDay = new Date(y, m, 0).getDate();
+    return { start: `${y}-${String(m).padStart(2,'0')}-01`, end: `${y}-${String(m).padStart(2,'0')}-${lastDay}` };
+  }
+
+  // Default: next 3 months
+  const start = new Date(now);
+  start.setDate(start.getDate() + 7);
+  const end = new Date(start);
+  end.setMonth(end.getMonth() + 3);
+  return { start: isoDate(start), end: isoDate(end) };
+}
+
+function extractPermitName(text) {
+  // Remove command words and filler to extract the permit name
+  const filler = ['track','watch','monitor','alert','notify','me','to','for','in','on',
+    'check','show','search','find','look','up','any','the','a','an','at','of',
+    'permits','permit','availability','available','spots','openings','during','from',
+    'through','this','next','please','can','you','i','want','would','like'];
+  // Also remove month/season words
+  const dateWords = Object.keys(MONTHS).concat(Object.keys(SEASONS));
+  const removeWords = new Set([...filler, ...dateWords]);
+  const words = text.split(/\s+/).filter(w => !removeWords.has(w.toLowerCase()) && !/^\d+$/.test(w));
+  return words.join(' ').trim();
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addChatMsg(esc(text), true);
+
+  const lower = text.toLowerCase().trim();
+
+  // Help command
+  if (/^help$/i.test(lower)) {
+    addChatMsg(`<strong>Commands:</strong><br>
+      <em>track [permit] for [month/season]</em> — search &amp; set up tracking<br>
+      <em>check [permit]</em> or <em>show [permit]</em> — search for availability<br>
+      <em>list</em> or <em>status</em> or <em>what am I tracking</em> — show trackers<br>
+      <em>delete tracker [id]</em> or <em>remove [id]</em> — delete a tracker<br>
+      <em>help</em> — show this message`, false);
+    return;
+  }
+
+  // List / status commands
+  if (/^(list|status|trackers|what am i tracking|my trackers|show trackers)\??$/i.test(lower)) {
+    if (cachedTrackers.length === 0) {
+      addChatMsg("You don't have any trackers yet. Try: <em>track Half Dome for July</em>", false);
+    } else {
+      const lines = cachedTrackers.map(t => {
+        const health = getHealthStatus(t);
+        return `<strong>#${t.id}</strong> ${esc(t.permit_name)} (${t.start_date} to ${t.end_date}) — ${health.label}`;
+      }).join('<br>');
+      addChatMsg(lines, false);
+    }
+    return;
+  }
+
+  // Delete / remove command
+  const deleteMatch = lower.match(/(?:delete|remove|stop)\s+(?:tracker\s*)?#?(\d+)/);
+  if (deleteMatch) {
+    const id = parseInt(deleteMatch[1]);
+    try {
+      await fetch(`/api/trackers/${id}`, { method: 'DELETE' });
+      addChatMsg(`Tracker #${id} deleted.`, false);
+      loadTrackers();
+      loadAlerts();
+    } catch (err) {
+      addChatMsg(`Failed to delete tracker #${id}: ${err.message}`, false);
+    }
+    return;
+  }
+
+  // Track / watch command — search then create
+  const isTrack = /^(track|watch|monitor|alert|notify)\b/i.test(lower);
+  if (isTrack) {
+    const permitName = extractPermitName(text);
+    if (!permitName) {
+      addChatMsg("What permit would you like to track? e.g. <em>track Half Dome for July</em>", false);
+      return;
+    }
+    const dateRange = parseDateRange(text);
+    addChatMsg(`Searching for "${esc(permitName)}"...`, false);
+    try {
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(permitName)}`);
+      const results = await resp.json();
+      if (results.error || results.length === 0) {
+        addChatMsg(`No permits found for "${esc(permitName)}". Try a different name.`, false);
+        return;
+      }
+      const p = results[0]; // Best match
+      // Check if we have saved notification preferences
+      const prefs = savedPreferences;
+      if (!prefs.notify_email && !prefs.notify_ntfy_topic && !prefs.notify_sms_phone) {
+        addChatMsg(`Found <strong>${esc(p.name)}</strong>. Set up notification preferences in the form above first, then try again.`, false);
+        selectPermit(p.id, p.name, p.location);
+        return;
+      }
+      // Create tracker with saved prefs
+      const body = {
+        permit_id: p.id,
+        permit_name: p.name,
+        division_ids: [],
+        start_date: dateRange.start,
+        end_date: dateRange.end,
+        notify_email: prefs.notify_email || '',
+        notify_ntfy_topic: prefs.notify_ntfy_topic || '',
+        notify_sms_phone: prefs.notify_sms_phone || '',
+        notify_sms_carrier: prefs.notify_sms_carrier || '',
+      };
+      const createResp = await fetch('/api/trackers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const createData = await createResp.json();
+      if (createData.error) {
+        addChatMsg(`Error: ${createData.error}`, false);
+      } else {
+        addChatMsg(`Tracking <strong>${esc(p.name)}</strong> from ${dateRange.start} to ${dateRange.end}. Tracker #${createData.id} created!`, false);
+        loadTrackers();
+      }
+    } catch (err) {
+      addChatMsg(`Search failed: ${err.message}`, false);
+    }
+    return;
+  }
+
+  // Check / show / search command
+  const isCheck = /^(check|show|search|find|look)\b/i.test(lower);
+  if (isCheck) {
+    const permitName = extractPermitName(text);
+    if (!permitName) {
+      addChatMsg("What permit should I search? e.g. <em>check Half Dome</em>", false);
+      return;
+    }
+    addChatMsg(`Searching for "${esc(permitName)}"...`, false);
+    try {
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(permitName)}`);
+      const results = await resp.json();
+      if (results.error || results.length === 0) {
+        addChatMsg(`No permits found for "${esc(permitName)}".`, false);
+        return;
+      }
+      const lines = results.slice(0, 5).map(p =>
+        `<strong>${esc(p.name)}</strong><br><span style="color:var(--gray-500);font-size:0.85em">${esc(p.location)} (ID: ${p.id})</span>`
+      ).join('<br><br>');
+      addChatMsg(lines, false);
+    } catch (err) {
+      addChatMsg(`Search failed: ${err.message}`, false);
+    }
+    return;
+  }
+
+  // Fallback
+  addChatMsg("I didn't understand that. Type <strong>help</strong> to see what I can do.", false);
 }
 
 // ---------------------------------------------------------------------------
@@ -551,11 +919,11 @@ loadTrackers();
 loadAlerts();
 loadPreferences();
 
-// Auto-refresh every 60 seconds
+// Auto-refresh every 30 seconds for more responsive dashboard
 setInterval(() => {
   loadTrackers();
   loadAlerts();
-}, 60000);
+}, 30000);
 </script>
 
 </body>
