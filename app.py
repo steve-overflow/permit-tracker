@@ -8,9 +8,7 @@ and sending notifications when slots open up.
 import json
 import logging
 import os
-import random
 import sqlite3
-import string
 from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -125,10 +123,6 @@ def init_db():
             division_ids TEXT NOT NULL DEFAULT '[]',
             start_date TEXT NOT NULL,
             end_date TEXT NOT NULL,
-            notify_email TEXT DEFAULT '',
-            notify_ntfy_topic TEXT DEFAULT '',
-            notify_sms_phone TEXT DEFAULT '',
-            notify_sms_carrier TEXT DEFAULT '',
             notify_telegram_chat_id TEXT DEFAULT '',
             active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -155,10 +149,6 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS user_preferences (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            notify_email TEXT DEFAULT '',
-            notify_ntfy_topic TEXT DEFAULT '',
-            notify_sms_phone TEXT DEFAULT '',
-            notify_sms_carrier TEXT DEFAULT '',
             notify_telegram_chat_id TEXT DEFAULT '',
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -167,10 +157,6 @@ def init_db():
     # Migrate: add telegram column if missing (existing DBs won't have it)
     try:
         conn.execute("ALTER TABLE trackers ADD COLUMN notify_telegram_chat_id TEXT DEFAULT ''")
-    except Exception:
-        pass  # Column already exists
-    try:
-        conn.execute("ALTER TABLE user_preferences ADD COLUMN notify_telegram_chat_id TEXT DEFAULT ''")
     except Exception:
         pass
     conn.close()
@@ -373,19 +359,14 @@ def api_create_tracker():
     cursor = db.execute(
         """INSERT INTO trackers
            (permit_id, permit_name, division_ids, start_date, end_date,
-            notify_email, notify_ntfy_topic, notify_sms_phone, notify_sms_carrier,
             notify_telegram_chat_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?)""",
         (
             data["permit_id"],
             data["permit_name"],
             json.dumps(data.get("division_ids", [])),
             data["start_date"],
             data["end_date"],
-            data.get("notify_email", ""),
-            data.get("notify_ntfy_topic", ""),
-            data.get("notify_sms_phone", ""),
-            data.get("notify_sms_carrier", ""),
             data.get("notify_telegram_chat_id", ""),
         ),
     )
@@ -448,15 +429,11 @@ def api_test_notification():
         return jsonify({"error": "JSON body required"}), 400
 
     notif_type = data.get("type", "")
-    if notif_type not in ("email", "ntfy", "sms", "telegram"):
-        return jsonify({"error": "type must be email, ntfy, sms, or telegram"}), 400
+    if notif_type != "telegram":
+        return jsonify({"error": "type must be telegram"}), 400
 
     result = send_test_notification(
-        notif_type,
-        email=data.get("email", ""),
-        ntfy_topic=data.get("ntfy_topic", ""),
-        sms_phone=data.get("sms_phone", ""),
-        sms_carrier=data.get("sms_carrier", ""),
+        "telegram",
         telegram_chat_id=data.get("telegram_chat_id", ""),
     )
     return jsonify(result)
@@ -475,12 +452,6 @@ def api_test_all_notifications(tracker_id):
     results = []
     if t.get("notify_telegram_chat_id"):
         results.append(send_test_notification("telegram", telegram_chat_id=t["notify_telegram_chat_id"]))
-    if t.get("notify_ntfy_topic"):
-        results.append(send_test_notification("ntfy", ntfy_topic=t["notify_ntfy_topic"]))
-    if t.get("notify_email"):
-        results.append(send_test_notification("email", email=t["notify_email"]))
-    if t.get("notify_sms_phone") and t.get("notify_sms_carrier"):
-        results.append(send_test_notification("sms", sms_phone=t["notify_sms_phone"], sms_carrier=t["notify_sms_carrier"]))
 
     if not results:
         return jsonify({"error": "No notification channels configured"}), 400
@@ -515,15 +486,6 @@ def api_check_now(tracker_id):
 # User Preferences API
 # ---------------------------------------------------------------------------
 
-@app.route("/api/generate-topic", methods=["POST"])
-@login_required
-def api_generate_topic():
-    """Generate a unique ntfy topic name."""
-    suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-    topic = f"permit-tracker-{suffix}"
-    return jsonify({"topic": topic})
-
-
 @app.route("/api/preferences", methods=["GET"])
 @login_required
 def api_get_preferences():
@@ -531,14 +493,11 @@ def api_get_preferences():
     db = get_db()
     row = db.execute("SELECT * FROM user_preferences ORDER BY id DESC LIMIT 1").fetchone()
     if row:
+        chat_id = row["notify_telegram_chat_id"] if "notify_telegram_chat_id" in row.keys() else ""
         prefs = {
-            "notify_email": row["notify_email"] if "notify_email" in row.keys() else "",
-            "notify_ntfy_topic": row["notify_ntfy_topic"] if "notify_ntfy_topic" in row.keys() else "",
-            "notify_sms_phone": row["notify_sms_phone"] if "notify_sms_phone" in row.keys() else "",
-            "notify_sms_carrier": row["notify_sms_carrier"] if "notify_sms_carrier" in row.keys() else "",
-            "notify_telegram_chat_id": row["notify_telegram_chat_id"] if "notify_telegram_chat_id" in row.keys() else "",
+            "notify_telegram_chat_id": chat_id,
+            "setup_complete": bool(chat_id),
         }
-        prefs["setup_complete"] = bool(prefs.get("notify_telegram_chat_id") or prefs.get("notify_ntfy_topic") or prefs.get("notify_email"))
         return jsonify(prefs)
     return jsonify({"setup_complete": False})
 
@@ -552,15 +511,9 @@ def api_save_preferences():
     # Upsert — delete old, insert new
     db.execute("DELETE FROM user_preferences")
     db.execute(
-        """INSERT INTO user_preferences (notify_email, notify_ntfy_topic, notify_sms_phone, notify_sms_carrier, notify_telegram_chat_id)
-           VALUES (?, ?, ?, ?, ?)""",
-        (
-            data.get("notify_email", ""),
-            data.get("notify_ntfy_topic", ""),
-            data.get("notify_sms_phone", ""),
-            data.get("notify_sms_carrier", ""),
-            data.get("notify_telegram_chat_id", ""),
-        )
+        """INSERT INTO user_preferences (notify_telegram_chat_id)
+           VALUES (?)""",
+        (data.get("notify_telegram_chat_id", ""),)
     )
     db.commit()
     return jsonify({"ok": True})
@@ -576,35 +529,23 @@ def send_daily_checkin():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
 
-    # Collect unique notification targets from trackers AND global prefs
-    targets = {
-        "telegram": set(),
-        "ntfy": set(),
-        "email": set(),
-    }
+    # Collect unique Telegram chat IDs from trackers AND global prefs
+    telegram_targets = set()
 
     # From active trackers
     trackers = conn.execute("SELECT * FROM trackers WHERE active = 1").fetchall()
     for t in trackers:
         if t["notify_telegram_chat_id"]:
-            targets["telegram"].add(t["notify_telegram_chat_id"])
-        if t["notify_ntfy_topic"]:
-            targets["ntfy"].add(t["notify_ntfy_topic"])
-        if t["notify_email"]:
-            targets["email"].add(t["notify_email"])
+            telegram_targets.add(t["notify_telegram_chat_id"])
 
     # From global preferences
     pref = conn.execute("SELECT * FROM user_preferences ORDER BY id DESC LIMIT 1").fetchone()
     if pref:
         try:
             if pref["notify_telegram_chat_id"]:
-                targets["telegram"].add(pref["notify_telegram_chat_id"])
+                telegram_targets.add(pref["notify_telegram_chat_id"])
         except Exception:
             pass
-        if pref["notify_ntfy_topic"]:
-            targets["ntfy"].add(pref["notify_ntfy_topic"])
-        if pref["notify_email"]:
-            targets["email"].add(pref["notify_email"])
 
     # --- Gather real stats ---
     tracker_count = len(trackers)
@@ -660,7 +601,6 @@ def send_daily_checkin():
     conn.close()
 
     now = datetime.utcnow().strftime("%b %d, %Y %H:%M UTC")
-    from notifications import send_telegram, send_ntfy, send_email
 
     # Build status message
     if tracker_count > 0:
@@ -675,12 +615,10 @@ def send_daily_checkin():
     results = []
 
     # --- Telegram ---
-    for chat_id in targets["telegram"]:
-        from notifications import TELEGRAM_BOT_TOKEN
+    from notifications import TELEGRAM_BOT_TOKEN, _SSL_CTX
+    for chat_id in telegram_targets:
         if TELEGRAM_BOT_TOKEN:
-            import json as _json
             from urllib.request import Request, urlopen
-            from notifications import _SSL_CTX
             msg = (
                 f"📊 *Daily Check\\-in*\n\n"
                 f"{status_emoji} {_md2_escape(status_text)}\n\n"
@@ -693,7 +631,7 @@ def send_daily_checkin():
                 f"\n\n*Trackers:*\n{_md2_escape(tracker_summary)}\n\n"
                 f"🕐 {_md2_escape(now)}"
             )
-            payload = _json.dumps({
+            payload = json.dumps({
                 "chat_id": chat_id,
                 "text": msg,
                 "parse_mode": "MarkdownV2",
@@ -712,34 +650,6 @@ def send_daily_checkin():
                 results.append({"type": "telegram", "target": chat_id, "success": False, "error": str(e)})
                 log.error("Daily check-in Telegram failed for %s: %s", chat_id, e)
 
-    # --- ntfy ---
-    for topic in targets["ntfy"]:
-        msg = (
-            f"📊 Daily Check-in\n\n"
-            f"{status_emoji} {status_text}\n\n"
-            f"Last 24 hours:\n"
-            f"🔍 ~{expected_checks_per_day} checks performed\n"
-            f"📋 {tracker_count} active tracker{'s' if tracker_count != 1 else ''}\n"
-            f"🔔 {alerts_24h} alert{'s' if alerts_24h != 1 else ''} sent\n\n"
-            f"Trackers:\n{tracker_summary}"
-        )
-        # send_ntfy expects slots but we pass a dummy for compatibility
-        ok = send_ntfy(topic, "Daily Check-in", [{
-            "permit_id": "0", "division_id": "0", "division_name": status_text,
-            "date": now, "date_raw": datetime.utcnow().isoformat() + "Z",
-            "remaining": alerts_24h, "total": tracker_count,
-        }])
-        results.append({"type": "ntfy", "target": topic, "success": ok})
-
-    # --- Email ---
-    for addr in targets["email"]:
-        ok = send_email(addr, "Daily Check-in", [{
-            "permit_id": "0", "division_id": "0", "division_name": status_text,
-            "date": now, "date_raw": datetime.utcnow().isoformat() + "Z",
-            "remaining": alerts_24h, "total": tracker_count,
-        }])
-        results.append({"type": "email", "target": addr, "success": ok})
-
     log.info("Daily check-in complete: %s", results)
     return results
 
@@ -756,7 +666,7 @@ def api_daily_checkin():
     """Manually trigger a daily check-in status report."""
     results = send_daily_checkin()
     if not results:
-        return jsonify({"error": "No notification channels configured. Set up Telegram or ntfy first!"}), 400
+        return jsonify({"error": "No Telegram chat ID configured. Connect via @Permit_tracker_bot first!"}), 400
     return jsonify({"results": results})
 
 

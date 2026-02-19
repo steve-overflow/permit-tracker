@@ -74,73 +74,21 @@
       </div>
 
       <h3>Notifications</h3>
-      <p class="hint" style="margin-bottom: 12px">How should we alert you when spots open up?</p>
-
-      <!-- Telegram -->
       <div class="notif-card" id="telegram-card">
         <div class="notif-card-header">
           <div class="notif-meta">
-            <div class="notif-name">
-              Telegram
-              <span class="notif-badge notif-badge-rec">Recommended</span>
+            <div class="notif-name" id="telegram-status-text">
+              Checking Telegram connection...
             </div>
-            <div class="notif-desc">Open <a href="https://t.me/Permit_tracker_bot" target="_blank">@Permit_tracker_bot</a>, send <code>/start permit2025!</code>, paste your Chat ID below</div>
+            <div class="notif-desc" id="telegram-status-desc"></div>
           </div>
-          <span class="notif-check" aria-label="Configured">&#10003;</span>
         </div>
         <div class="notif-card-body">
-          <div class="input-row">
-            <input type="text" id="notify-telegram" placeholder="Chat ID (e.g. 123456789)" aria-label="Telegram Chat ID">
-            <button class="btn btn-secondary btn-sm" onclick="testNotification('telegram')">Test</button>
-          </div>
+          <input type="hidden" id="notify-telegram" value="">
+          <button class="btn btn-secondary btn-sm" id="telegram-test-btn" onclick="testNotification('telegram')" style="display:none">Test</button>
           <div id="telegram-test-result" class="test-result hidden"></div>
         </div>
       </div>
-
-      <!-- ntfy -->
-      <div class="notif-card" id="ntfy-card">
-        <div class="notif-card-header">
-          <div class="notif-meta">
-            <div class="notif-name">Push Notifications</div>
-            <div class="notif-desc">Free via <a href="https://ntfy.sh" target="_blank">ntfy.sh</a> &mdash; <a href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank">iOS</a> / <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank">Android</a></div>
-          </div>
-          <span class="notif-check" aria-label="Configured">&#10003;</span>
-        </div>
-        <div class="notif-card-body">
-          <div class="input-row">
-            <input type="text" id="notify-ntfy" placeholder="permit-tracker-yourname" aria-label="ntfy topic">
-            <button class="btn btn-secondary btn-sm" onclick="generateTopic()">Generate</button>
-            <button class="btn btn-secondary btn-sm" onclick="testNotification('ntfy')">Test</button>
-          </div>
-          <div id="ntfy-test-result" class="test-result hidden"></div>
-        </div>
-      </div>
-
-      <!-- Email (collapsed) -->
-      <details class="notif-card" id="email-card">
-        <summary class="notif-card-header">
-          <div class="notif-meta">
-            <div class="notif-name">
-              Email
-              <span class="notif-badge notif-badge-opt">Optional</span>
-            </div>
-            <div class="notif-desc">May go to spam</div>
-          </div>
-          <span class="notif-check" aria-label="Configured">&#10003;</span>
-          <span class="chevron" aria-hidden="true">&#9656;</span>
-        </summary>
-        <div class="notif-card-body">
-          <div class="input-row">
-            <input type="email" id="notify-email" placeholder="you@example.com" aria-label="Email address">
-            <button class="btn btn-secondary btn-sm" onclick="testNotification('email')">Test</button>
-          </div>
-          <div id="email-test-result" class="test-result hidden"></div>
-        </div>
-      </details>
-
-      <!-- Hidden fields for SMS backward compat -->
-      <input type="hidden" id="notify-phone" value="">
-      <input type="hidden" id="notify-carrier" value="">
 
       <div class="config-actions">
         <button class="btn btn-primary" onclick="createTracker()">Start Tracking</button>
@@ -394,12 +342,8 @@ function resetConfig() {
   permitDivisions = {};
   document.getElementById('config-section').classList.add('hidden');
   document.getElementById('search-section').classList.remove('hidden');
-  document.getElementById('notify-email').value = '';
-  document.getElementById('notify-ntfy').value = '';
-  document.getElementById('notify-phone').value = '';
-  document.getElementById('notify-carrier').value = '';
   applyPreferences();
-  updateNotifCards();
+  updateTelegramStatus();
 }
 
 // ---------------------------------------------------------------------------
@@ -416,13 +360,9 @@ async function createTracker() {
   }
 
   const telegram = document.getElementById('notify-telegram').value.trim();
-  const ntfy = document.getElementById('notify-ntfy').value.trim();
-  const email = document.getElementById('notify-email').value.trim();
-  const phone = document.getElementById('notify-phone').value.trim();
-  const carrier = document.getElementById('notify-carrier').value;
 
-  if (!telegram && !ntfy && !email) {
-    showToast('error', 'No notifications', 'Set up at least one notification method.');
+  if (!telegram) {
+    showToast('error', 'No notifications', 'Connect via @Permit_tracker_bot first to get notifications.');
     return;
   }
 
@@ -435,10 +375,6 @@ async function createTracker() {
     start_date: startDate,
     end_date: endDate,
     notify_telegram_chat_id: telegram,
-    notify_ntfy_topic: ntfy,
-    notify_email: email,
-    notify_sms_phone: phone,
-    notify_sms_carrier: carrier,
   };
 
   try {
@@ -551,10 +487,6 @@ async function loadTrackers() {
       let channelPills = '';
       if (t.notify_telegram_chat_id)
         channelPills += `<span class="channel-pill channel-pill-on">Telegram</span>`;
-      if (t.notify_ntfy_topic)
-        channelPills += `<span class="channel-pill channel-pill-on">Push</span>`;
-      if (t.notify_email)
-        channelPills += `<span class="channel-pill channel-pill-on">Email</span>`;
       if (!channelPills)
         channelPills = '<span class="channel-pill channel-pill-warn">No notifications</span>';
 
@@ -693,39 +625,24 @@ async function testAllNotifications(id, btn) {
 // Test notifications (config form)
 // ---------------------------------------------------------------------------
 async function testNotification(type) {
-  const btn = event.target;
+  const btn = document.getElementById('telegram-test-btn');
   const origText = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Sending...';
 
-  const resultEl = document.getElementById(`${type}-test-result`);
-
-  const body = { type };
-  if (type === 'telegram') {
-    body.telegram_chat_id = document.getElementById('notify-telegram').value.trim();
-    if (!body.telegram_chat_id) { showTestResult(resultEl, false, 'Enter your Chat ID first'); btn.disabled = false; btn.textContent = origText; return; }
-  } else if (type === 'email') {
-    body.email = document.getElementById('notify-email').value.trim();
-    if (!body.email) { showTestResult(resultEl, false, 'Enter an email first'); btn.disabled = false; btn.textContent = origText; return; }
-  } else if (type === 'ntfy') {
-    body.ntfy_topic = document.getElementById('notify-ntfy').value.trim();
-    if (!body.ntfy_topic) { showTestResult(resultEl, false, 'Enter a topic first'); btn.disabled = false; btn.textContent = origText; return; }
-  } else if (type === 'sms') {
-    body.sms_phone = document.getElementById('notify-phone').value.trim();
-    body.sms_carrier = document.getElementById('notify-carrier').value;
-    if (!body.sms_phone || !body.sms_carrier) { showTestResult(resultEl, false, 'Enter phone and carrier'); btn.disabled = false; btn.textContent = origText; return; }
-  }
+  const resultEl = document.getElementById('telegram-test-result');
+  const chatId = document.getElementById('notify-telegram').value.trim();
+  if (!chatId) { showTestResult(resultEl, false, 'Not connected — open @Permit_tracker_bot and send /start'); btn.disabled = false; btn.textContent = origText; return; }
 
   try {
     const resp = await fetch('/api/test-notification', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ type: 'telegram', telegram_chat_id: chatId }),
     });
     const data = await resp.json();
     if (data.success) {
-      showTestResult(resultEl, true, 'Sent! Check your ' + type);
-      updateNotifCards();
+      showTestResult(resultEl, true, 'Sent! Check your Telegram');
     } else {
       showTestResult(resultEl, false, data.error || 'Unknown error');
     }
@@ -771,22 +688,26 @@ function showTestResult(el, success, msg) {
   setTimeout(() => el.classList.add('hidden'), 6000);
 }
 
-// Update notif card green-check state
-function updateNotifCards() {
-  const tg = document.getElementById('notify-telegram').value.trim();
-  document.getElementById('telegram-card').classList.toggle('notif-configured', !!tg);
+// Update Telegram connection status card
+function updateTelegramStatus() {
+  const chatId = document.getElementById('notify-telegram').value.trim();
+  const statusText = document.getElementById('telegram-status-text');
+  const statusDesc = document.getElementById('telegram-status-desc');
+  const testBtn = document.getElementById('telegram-test-btn');
+  const card = document.getElementById('telegram-card');
 
-  const ntfy = document.getElementById('notify-ntfy').value.trim();
-  document.getElementById('ntfy-card').classList.toggle('notif-configured', !!ntfy);
-
-  const em = document.getElementById('notify-email').value.trim();
-  document.getElementById('email-card').classList.toggle('notif-configured', !!em);
+  if (chatId) {
+    statusText.innerHTML = '&#10004; Connected via Telegram';
+    statusDesc.textContent = 'You\'ll receive notifications in your Telegram chat.';
+    testBtn.style.display = '';
+    card.classList.add('notif-configured');
+  } else {
+    statusText.textContent = 'Not connected';
+    statusDesc.innerHTML = 'Open <a href="https://t.me/Permit_tracker_bot" target="_blank">@Permit_tracker_bot</a> and send <code>/start</code> to connect.';
+    testBtn.style.display = 'none';
+    card.classList.remove('notif-configured');
+  }
 }
-
-// Watch inputs for live check updates
-['notify-telegram', 'notify-ntfy', 'notify-email'].forEach(id => {
-  document.getElementById(id).addEventListener('input', updateNotifCards);
-});
 
 // ---------------------------------------------------------------------------
 // Load alerts
@@ -853,31 +774,12 @@ async function loadPreferences() {
 function applyPreferences() {
   const p = savedPreferences;
   if (p.notify_telegram_chat_id) document.getElementById('notify-telegram').value = p.notify_telegram_chat_id;
-  if (p.notify_ntfy_topic) document.getElementById('notify-ntfy').value = p.notify_ntfy_topic;
-  if (p.notify_email) document.getElementById('notify-email').value = p.notify_email;
-  if (p.notify_sms_phone) document.getElementById('notify-phone').value = p.notify_sms_phone;
-  if (p.notify_sms_carrier) document.getElementById('notify-carrier').value = p.notify_sms_carrier;
-  updateNotifCards();
-}
-
-async function generateTopic() {
-  try {
-    const resp = await fetch('/api/generate-topic', { method: 'POST' });
-    const data = await resp.json();
-    document.getElementById('notify-ntfy').value = data.topic;
-    updateNotifCards();
-  } catch (e) {
-    showToast('error', 'Error', 'Failed to generate topic');
-  }
+  updateTelegramStatus();
 }
 
 async function savePreferences() {
   const telegram = document.getElementById('notify-telegram')?.value?.trim() || '';
-  const ntfy = document.getElementById('notify-ntfy')?.value?.trim() || '';
-  const email = document.getElementById('notify-email')?.value?.trim() || '';
-  const phone = document.getElementById('notify-phone')?.value?.trim() || '';
-  const carrier = document.getElementById('notify-carrier')?.value || '';
-  savedPreferences = {notify_telegram_chat_id: telegram, notify_ntfy_topic: ntfy, notify_email: email, notify_sms_phone: phone, notify_sms_carrier: carrier};
+  savedPreferences = {notify_telegram_chat_id: telegram};
   try {
     await fetch('/api/preferences', {
       method: 'POST',
@@ -1039,8 +941,8 @@ async function createTrackersFromSelection(selectedIndices) {
   const prefs = savedPreferences;
   chatState = null;
 
-  if (!prefs.notify_telegram_chat_id && !prefs.notify_email && !prefs.notify_ntfy_topic && !prefs.notify_sms_phone) {
-    addChatMsg(`Set up notification preferences in the form above first, then try again.`, false);
+  if (!prefs.notify_telegram_chat_id) {
+    addChatMsg(`Connect via <a href="https://t.me/Permit_tracker_bot" target="_blank">@Permit_tracker_bot</a> first to get notifications.`, false);
     return;
   }
 
@@ -1054,11 +956,7 @@ async function createTrackersFromSelection(selectedIndices) {
         division_ids: [],
         start_date: dateRange.start,
         end_date: dateRange.end,
-        notify_email: prefs.notify_email || '',
         notify_telegram_chat_id: prefs.notify_telegram_chat_id || '',
-        notify_ntfy_topic: prefs.notify_ntfy_topic || '',
-        notify_sms_phone: prefs.notify_sms_phone || '',
-        notify_sms_carrier: prefs.notify_sms_carrier || '',
       };
       const resp = await fetch('/api/trackers', {
         method: 'POST',

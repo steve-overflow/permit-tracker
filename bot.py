@@ -114,16 +114,32 @@ def authorize_user(user_id):
 # Command handlers
 # ---------------------------------------------------------------------------
 
-def handle_start(chat_id, user_id, args, first_name):
-    chat_id_msg = f"\n\n📋 *Your Chat ID:* `{chat_id}`\nCopy this into the web app to get Telegram notifications!"
+def _save_chat_id_to_prefs(chat_id):
+    """Save the user's Telegram chat_id to user_preferences so web UI auto-detects it."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "INSERT OR REPLACE INTO user_preferences (id, notify_telegram_chat_id, updated_at) "
+            "VALUES ((SELECT id FROM user_preferences ORDER BY id DESC LIMIT 1), ?, datetime('now'))",
+            (str(chat_id),),
+        )
+        conn.commit()
+        conn.close()
+        log.info("Saved chat_id %s to user_preferences", chat_id)
+    except Exception as e:
+        log.error("Failed to save chat_id to prefs: %s", e)
 
+
+def handle_start(chat_id, user_id, args, first_name):
     if not ACCESS_CODE:
         authorize_user(user_id)
-        send_message(chat_id, f"👋 Welcome {first_name}! No access code required.{chat_id_msg}\n\nUse /help to see commands.", parse_mode="Markdown")
+        _save_chat_id_to_prefs(chat_id)
+        send_message(chat_id, f"👋 Welcome {first_name}! No access code required.\n\nUse /help to see commands.")
         return
 
     if is_authorized(user_id):
-        send_message(chat_id, f"👋 Welcome back {first_name}! You're already verified.{chat_id_msg}\n\nUse /help to see commands.", parse_mode="Markdown")
+        _save_chat_id_to_prefs(chat_id)
+        send_message(chat_id, f"👋 Welcome back {first_name}! You're already verified.\n\n✅ Connected via Telegram\n\nUse /help to see commands.")
         return
 
     if not args:
@@ -132,13 +148,14 @@ def handle_start(chat_id, user_id, args, first_name):
 
     if args.strip() == ACCESS_CODE:
         authorize_user(user_id)
-        send_message(chat_id, f"✅ Access granted! Welcome {first_name}.{chat_id_msg}\n\nUse /help to see what I can do.", parse_mode="Markdown")
+        _save_chat_id_to_prefs(chat_id)
+        send_message(chat_id, f"✅ Access granted! Welcome {first_name}.\n\n✅ Connected via Telegram — you'll get notifications here.\n\nUse /help to see what I can do.")
     else:
         send_message(chat_id, "❌ Invalid access code. Try again with /start <code>")
 
 
 def handle_chatid(chat_id):
-    send_message(chat_id, f"📋 Your Chat ID is: <code>{chat_id}</code>\n\nCopy this into the Permit Tracker web app to receive Telegram notifications!")
+    send_message(chat_id, f"📋 Your Chat ID is: <code>{chat_id}</code>\n\nYour Telegram is already connected for notifications!")
 
 
 def handle_test(chat_id):
@@ -220,20 +237,14 @@ def handle_track(chat_id, user_id, args):
         name = info.get("name", "Unknown")
         divisions = info.get("divisions", {})
 
-        # Save to DB — also pull saved user_preferences for other notification channels
-        prefs = _get_user_prefs(chat_id)
+        # Save to DB
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
             """INSERT INTO trackers
                (permit_id, permit_name, division_ids, start_date, end_date,
-                notify_email, notify_ntfy_topic, notify_sms_phone, notify_sms_carrier,
                 notify_telegram_chat_id, active)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+               VALUES (?, ?, ?, ?, ?, ?, 1)""",
             (permit_id, name, json.dumps([]), start_date, end_date,
-             prefs.get("notify_email", ""),
-             prefs.get("notify_ntfy_topic", ""),
-             prefs.get("notify_sms_phone", ""),
-             prefs.get("notify_sms_carrier", ""),
              str(chat_id))
         )
         tracker_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -811,10 +822,6 @@ def _get_user_prefs(chat_id):
         conn.close()
         if row:
             return {
-                "notify_email": row["notify_email"] if "notify_email" in row.keys() else "",
-                "notify_ntfy_topic": row["notify_ntfy_topic"] if "notify_ntfy_topic" in row.keys() else "",
-                "notify_sms_phone": row["notify_sms_phone"] if "notify_sms_phone" in row.keys() else "",
-                "notify_sms_carrier": row["notify_sms_carrier"] if "notify_sms_carrier" in row.keys() else "",
                 "notify_telegram_chat_id": row["notify_telegram_chat_id"] if "notify_telegram_chat_id" in row.keys() else "",
             }
     except Exception as e:
@@ -823,27 +830,20 @@ def _get_user_prefs(chat_id):
 
 
 def _create_tracker_from_selection(chat_id, permit, start_date, end_date, division_ids=None):
-    """Create a tracker in the DB for a given permit, auto-filling notifications."""
-    prefs = _get_user_prefs(chat_id)
-
+    """Create a tracker in the DB for a given permit."""
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         """INSERT INTO trackers
            (permit_id, permit_name, division_ids, start_date, end_date,
-            notify_email, notify_ntfy_topic, notify_sms_phone, notify_sms_carrier,
             notify_telegram_chat_id, active)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+           VALUES (?, ?, ?, ?, ?, ?, 1)""",
         (
             permit["id"],
             permit["name"],
             json.dumps(division_ids or []),
             start_date,
             end_date,
-            prefs.get("notify_email", ""),
-            prefs.get("notify_ntfy_topic", ""),
-            prefs.get("notify_sms_phone", ""),
-            prefs.get("notify_sms_carrier", ""),
-            str(chat_id),  # Always use the user's Telegram chat_id
+            str(chat_id),
         ),
     )
     tracker_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
