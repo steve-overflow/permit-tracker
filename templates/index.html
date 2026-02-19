@@ -137,7 +137,16 @@
   <!-- Active Trackers — enhanced dashboard -->
   <!-- ============================================================ -->
   <section class="card" id="trackers-section">
-    <h2>Active Trackers</h2>
+    <div class="section-header">
+      <h2>Active Trackers</h2>
+      <button class="btn-mike-test" id="mike-test-btn" onclick="runMikeTest(this)" title="Send a test notification to all configured channels">
+        🎤 Mike Test
+      </button>
+    </div>
+    <p class="hint" style="margin-top:-8px;margin-bottom:12px">
+      🎤 A daily "mike test" notification is sent every 24 hours to confirm the system is running and notifications work.
+    </p>
+    <div id="mike-test-result" class="test-result hidden" style="margin-bottom:12px"></div>
     <div id="trackers-list">
       <p class="empty-state">No trackers yet. Search for a permit above to get started.</p>
     </div>
@@ -625,6 +634,29 @@ async function testNotification(type) {
   } finally {
     btn.disabled = false;
     btn.textContent = origText;
+  }
+}
+
+async function runMikeTest(btn) {
+  btn.disabled = true;
+  btn.textContent = '🎤 Sending...';
+  const resultEl = document.getElementById('mike-test-result');
+  try {
+    const resp = await fetch('/api/mike-test', { method: 'POST' });
+    const data = await resp.json();
+    if (data.error) {
+      showTestResult(resultEl, false, '❌ ' + data.error);
+    } else {
+      const summary = data.results.map(r =>
+        `${r.success ? '✅' : '❌'} ${r.type}`
+      ).join('  ');
+      showTestResult(resultEl, data.results.every(r => r.success), '🎤 Mike test sent! ' + summary);
+    }
+  } catch (err) {
+    showTestResult(resultEl, false, '❌ ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🎤 Mike Test';
   }
 }
 

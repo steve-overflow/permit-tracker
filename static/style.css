@@ -866,3 +866,41 @@ details.notif-card .notif-card-header {
 .notif-optional[open] summary::after {
   transform: rotate(90deg);
 }
+
+/* Section header with inline button */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.section-header h2 {
+  margin: 0;
+}
+
+.btn-mike-test {
+  background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-mike-test:hover {
+  background: linear-gradient(135deg, #7c3aed, #5b21b6);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(109, 40, 217, 0.3);
+}
+
+.btn-mike-test:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}

@@ -567,6 +567,127 @@ def api_save_preferences():
 
 
 # ---------------------------------------------------------------------------
+# Daily "Mike Test" — heartbeat notification to prove system is alive
+# ---------------------------------------------------------------------------
+
+def send_mike_test():
+    """Send a heartbeat notification to all configured channels across all trackers + global prefs.
+    Runs daily via scheduler and can be triggered manually."""
+    log.info("🎤 Mike test — sending heartbeat notifications...")
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    # Collect unique notification targets from trackers AND global prefs
+    targets = {
+        "telegram": set(),
+        "ntfy": set(),
+        "email": set(),
+    }
+
+    # From active trackers
+    trackers = conn.execute("SELECT * FROM trackers WHERE active = 1").fetchall()
+    for t in trackers:
+        if t["notify_telegram_chat_id"]:
+            targets["telegram"].add(t["notify_telegram_chat_id"])
+        if t["notify_ntfy_topic"]:
+            targets["ntfy"].add(t["notify_ntfy_topic"])
+        if t["notify_email"]:
+            targets["email"].add(t["notify_email"])
+
+    # From global preferences
+    pref = conn.execute("SELECT * FROM user_preferences ORDER BY id DESC LIMIT 1").fetchone()
+    if pref:
+        try:
+            if pref["notify_telegram_chat_id"]:
+                targets["telegram"].add(pref["notify_telegram_chat_id"])
+        except Exception:
+            pass
+        if pref["notify_ntfy_topic"]:
+            targets["ntfy"].add(pref["notify_ntfy_topic"])
+        if pref["notify_email"]:
+            targets["email"].add(pref["notify_email"])
+
+    conn.close()
+
+    tracker_count = len(trackers)
+    from notifications import send_telegram, send_ntfy, send_email
+
+    now = datetime.utcnow().strftime("%b %d, %Y %H:%M UTC")
+    results = []
+
+    # Build a heartbeat message
+    mike_slots = [{
+        "permit_id": "000000",
+        "division_id": "0",
+        "division_name": "System Heartbeat",
+        "date": now,
+        "date_raw": datetime.utcnow().isoformat() + "Z",
+        "remaining": 0,
+        "total": 0,
+    }]
+
+    for chat_id in targets["telegram"]:
+        from notifications import TELEGRAM_BOT_TOKEN
+        if TELEGRAM_BOT_TOKEN:
+            import json as _json
+            from urllib.request import Request, urlopen
+            from notifications import _SSL_CTX
+            msg = (
+                f"🎤 *Mike Test — System Heartbeat*\n\n"
+                f"✅ Permit Tracker is running!\n"
+                f"📊 Tracking {tracker_count} active permit(s)\n"
+                f"🕐 {now}\n\n"
+                f"_This daily check confirms your notifications are working._"
+            )
+            payload = _json.dumps({
+                "chat_id": chat_id,
+                "text": msg,
+                "parse_mode": "Markdown",
+            }).encode()
+            req = Request(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+                    results.append({"type": "telegram", "target": chat_id, "success": True})
+                    log.info("Mike test sent to Telegram %s", chat_id)
+            except Exception as e:
+                results.append({"type": "telegram", "target": chat_id, "success": False, "error": str(e)})
+                log.error("Mike test Telegram failed for %s: %s", chat_id, e)
+
+    for topic in targets["ntfy"]:
+        msg = (
+            f"🎤 Mike Test — System Heartbeat\n\n"
+            f"✅ Permit Tracker is running!\n"
+            f"📊 Tracking {tracker_count} active permit(s)\n"
+            f"🕐 {now}\n\n"
+            f"This daily check confirms your notifications are working."
+        )
+        ok = send_ntfy(topic, "Mike Test — System Heartbeat", mike_slots)
+        results.append({"type": "ntfy", "target": topic, "success": ok})
+
+    for addr in targets["email"]:
+        ok = send_email(addr, "Mike Test — System Heartbeat", mike_slots)
+        results.append({"type": "email", "target": addr, "success": ok})
+
+    log.info("Mike test complete: %s", results)
+    return results
+
+
+@app.route("/api/mike-test", methods=["POST"])
+@login_required
+def api_mike_test():
+    """Manually trigger a mike test heartbeat notification."""
+    results = send_mike_test()
+    if not results:
+        return jsonify({"error": "No notification channels configured. Set up Telegram or ntfy first!"}), 400
+    return jsonify({"results": results})
+
+
+# ---------------------------------------------------------------------------
 # Reports API (for monitoring by AI developer)
 # ---------------------------------------------------------------------------
 
@@ -607,8 +728,9 @@ init_db()
 
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(poll_all_trackers, "interval", minutes=10, id="poller", max_instances=1)
+scheduler.add_job(send_mike_test, "interval", hours=24, id="mike-test", max_instances=1)
 scheduler.start()
-log.info("Background scheduler started — polling every 10 minutes")
+log.info("Background scheduler started — polling every 10 minutes, mike test every 24 hours")
 
 # Start Telegram bot in background thread if token is set
 _bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")

@@ -128,6 +128,29 @@ def handle_chatid(chat_id):
     send_message(chat_id, f"📋 Your Chat ID is: <code>{chat_id}</code>\n\nCopy this into the Permit Tracker web app to receive Telegram notifications!")
 
 
+def handle_test(chat_id):
+    """Trigger a mike test — heartbeat notification to all configured channels."""
+    send_message(chat_id, "🎤 Running mike test...")
+    try:
+        # Import and run the mike test from app
+        import importlib
+        import sys
+        # Direct approach: call the function
+        from app import send_mike_test
+        results = send_mike_test()
+        if not results:
+            send_message(chat_id, "⚠️ No notification channels configured yet. Set up notifications in the web app first!")
+            return
+        lines = ["🎤 <b>Mike Test Results:</b>", ""]
+        for r in results:
+            icon = "✅" if r.get("success") else "❌"
+            lines.append(f"{icon} {r['type']} → {r.get('target', '?')}")
+        send_message(chat_id, "\n".join(lines))
+    except Exception as e:
+        log.error("Mike test from Telegram failed: %s", e)
+        send_message(chat_id, f"❌ Mike test failed: {e}")
+
+
 def handle_help(chat_id):
     send_message(chat_id, """🎯 <b>Permit Tracker Bot</b>
 
@@ -138,6 +161,7 @@ def handle_help(chat_id):
 /check &lt;tracker_id&gt; — Run immediate check
 /checkall — Check all trackers now
 /stop &lt;tracker_id&gt; — Stop tracking
+/test — 🎤 Mike test (send heartbeat to all notification channels)
 /chatid — Show your Chat ID (for web app notifications)
 /report &lt;issue&gt; — Report a bug or request a feature
 /help — Show this message
@@ -643,6 +667,8 @@ def process_update(update):
             handle_help(chat_id)
         elif command == "/chatid":
             handle_chatid(chat_id)
+        elif command == "/test":
+            handle_test(chat_id)
         elif command == "/search":
             handle_search(chat_id, args)
         elif command == "/track":
