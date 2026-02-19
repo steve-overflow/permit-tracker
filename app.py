@@ -727,10 +727,10 @@ def api_report_reply():
 init_db()
 
 scheduler = BackgroundScheduler(daemon=True)
-scheduler.add_job(poll_all_trackers, "interval", minutes=10, id="poller", max_instances=1)
+scheduler.add_job(poll_all_trackers, "interval", minutes=20, id="poller", max_instances=1)
 scheduler.add_job(send_mike_test, "interval", hours=24, id="mike-test", max_instances=1)
 scheduler.start()
-log.info("Background scheduler started — polling every 10 minutes, mike test every 24 hours")
+log.info("Background scheduler started — polling every 20 minutes, mike test every 24 hours")
 
 # Start Telegram bot in background thread if token is set
 _bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")

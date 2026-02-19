@@ -23,6 +23,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+import re
+
 from tracker import get_permit_info, search_permits, check_availability, _SSL_CTX
 
 logging.basicConfig(
@@ -37,7 +39,15 @@ ACCESS_CODE = os.environ.get("ACCESS_CODE", "")
 DB_PATH = os.environ.get("DB_PATH", "tracker.db")
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "")
 
-ALLOWED_USERS_FILE = "allowed_telegram_users.json"
+# ---------------------------------------------------------------------------
+# Conversation state for multi-step flows (search → select → create)
+# ---------------------------------------------------------------------------
+# Keyed by chat_id, stores pending search results awaiting user selection
+CONV_STATE = {}  # {chat_id: {results: [...], date_range: {start, end}, timestamp: float}}
+
+# Store auth file in persistent volume on Railway, local fallback for dev
+_data_dir = "/data" if os.path.isdir("/data") else "."
+ALLOWED_USERS_FILE = os.path.join(_data_dir, "allowed_telegram_users.json")
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +164,13 @@ def handle_test(chat_id):
 def handle_help(chat_id):
     send_message(chat_id, """🎯 <b>Permit Tracker Bot</b>
 
-<b>Commands:</b>
+<b>Just type naturally:</b>
+• <i>"river permits in Colorado for August"</i>
+• <i>"track Maroon Bells July through September"</i>
+• <i>"any Half Dome availability this summer?"</i>
+I'll search, show numbered results, and you pick which to track!
+
+<b>Commands (also work):</b>
 /search &lt;query&gt; — Search for permits
 /track &lt;permit_id&gt; &lt;start&gt; &lt;end&gt; — Track a permit
 /list — Show your active trackers
@@ -164,14 +180,7 @@ def handle_help(chat_id):
 /test — 🎤 Mike test (send heartbeat to all notification channels)
 /chatid — Show your Chat ID (for web app notifications)
 /report &lt;issue&gt; — Report a bug or request a feature
-/help — Show this message
-
-<b>Examples:</b>
-<code>/search half dome</code>
-<code>/search maroon bells</code>
-<code>/track 234652 2026-07-01 2026-08-31</code>
-
-<b>Tip:</b> After searching, I'll show you the permit ID to use with /track.""")
+/help — Show this message""")
 
 
 def handle_search(chat_id, query):
@@ -212,15 +221,21 @@ def handle_track(chat_id, user_id, args):
         name = info.get("name", "Unknown")
         divisions = info.get("divisions", {})
 
-        # Save to DB
+        # Save to DB — also pull saved user_preferences for other notification channels
+        prefs = _get_user_prefs(chat_id)
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
-            """INSERT INTO trackers 
-               (permit_id, permit_name, division_ids, start_date, end_date, 
+            """INSERT INTO trackers
+               (permit_id, permit_name, division_ids, start_date, end_date,
                 notify_email, notify_ntfy_topic, notify_sms_phone, notify_sms_carrier,
-                active, telegram_chat_id)
-               VALUES (?, ?, ?, ?, ?, '', '', '', '', 1, ?)""",
-            (permit_id, name, json.dumps([]), start_date, end_date, str(chat_id))
+                notify_telegram_chat_id, active)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+            (permit_id, name, json.dumps([]), start_date, end_date,
+             prefs.get("notify_email", ""),
+             prefs.get("notify_ntfy_topic", ""),
+             prefs.get("notify_sms_phone", ""),
+             prefs.get("notify_sms_carrier", ""),
+             str(chat_id))
         )
         tracker_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.commit()
@@ -251,13 +266,13 @@ def handle_list(chat_id, user_id):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT * FROM trackers WHERE telegram_chat_id = ? AND active = 1",
+        "SELECT * FROM trackers WHERE notify_telegram_chat_id = ? AND active = 1",
         (str(chat_id),)
     ).fetchall()
     conn.close()
 
     if not rows:
-        # Also check trackers without telegram_chat_id (web-created)
+        # Also check trackers without notify_telegram_chat_id (web-created)
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT * FROM trackers WHERE active = 1").fetchall()
@@ -290,7 +305,7 @@ def handle_check(chat_id, args):
         rows = conn.execute("SELECT * FROM trackers WHERE id = ? AND active = 1", (tracker_id,)).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM trackers WHERE (telegram_chat_id = ? OR telegram_chat_id IS NULL) AND active = 1",
+            "SELECT * FROM trackers WHERE (notify_telegram_chat_id = ? OR notify_telegram_chat_id = '' OR notify_telegram_chat_id IS NULL) AND active = 1",
             (str(chat_id),)
         ).fetchall()
     conn.close()
@@ -510,26 +525,33 @@ def handle_natural_language(chat_id, user_id, first_name, text):
     """Parse natural language and route to appropriate handler."""
     lower = text.lower()
     words = set(lower.split())
-    
-    # Check for "yes" confirmation of pending action
+
+    # Check if user is responding to a pending selection (numbered results)
+    if _get_conv_state(chat_id):
+        if handle_selection(chat_id, user_id, text):
+            return
+        # If parse_selection returned None, it's not a selection — fall through
+        # to treat as a new search (which will clear the old state)
+
+    # Check for "yes" confirmation of pending action (legacy single-result flow)
     if lower.strip() in ("yes", "yeah", "yep", "y", "sure", "ok", "do it", "go ahead"):
         pending = _get_pending(chat_id)
         if pending and pending.get("action") == "track":
-            handle_track(chat_id, user_id, 
+            handle_track(chat_id, user_id,
                 f"{pending['permit_id']} {pending['start_date']} {pending['end_date']}")
             return
-    
+
     # Check if it's a bug report
     for phrase in REPORT_WORDS:
         if phrase in lower:
             handle_report(chat_id, user_id, first_name, text)
             return
-    
+
     # Check if it's about stopping/canceling
     if words & STOP_WORDS:
         send_message(chat_id, "To stop a tracker, use /list to find its ID, then /stop <ID>")
         return
-    
+
     # Check if it's a status check
     if words & CHECK_WORDS and not (words & TRACK_WORDS):
         # Could be "check my trackers" or "check availability for X"
@@ -540,24 +562,24 @@ def handle_natural_language(chat_id, user_id, first_name, text):
         else:
             handle_check(chat_id, "")
         return
-    
+
     # Check if they want to track/alert/find something
     if words & (TRACK_WORDS | SEARCH_WORDS):
         query = extract_permit_query(text)
         if query and len(query) > 2:
             handle_search_and_maybe_track(chat_id, user_id, query, text)
             return
-    
+
     # Fallback: if it looks like a permit name (2+ words, no common phrases)
     query = extract_permit_query(text)
     if query and len(query) > 3:
         handle_search_and_maybe_track(chat_id, user_id, query, text)
         return
-    
+
     # True fallback
-    send_message(chat_id, 
+    send_message(chat_id,
         "🤔 I'm not sure what you mean. Try something like:\n\n"
-        "• <i>\"alert me to maroon bells permits in august\"</i>\n"
+        "• <i>\"river permits in Colorado for August\"</i>\n"
         "• <i>\"any half dome availability this summer?\"</i>\n"
         "• <i>\"check my trackers\"</i>\n\n"
         "Or use /help to see all commands."
@@ -565,51 +587,51 @@ def handle_natural_language(chat_id, user_id, first_name, text):
 
 
 def handle_search_and_maybe_track(chat_id, user_id, query, original_text):
-    """Search for a permit and offer to track it."""
+    """Search for a permit and show numbered results for conversational selection."""
+    # Clear any old conversation state
+    _clear_conv_state(chat_id)
+
     send_message(chat_id, f"🔍 Searching for: <b>{query}</b>...")
-    
+
     try:
         results = search_permits(query)
     except Exception as e:
         send_message(chat_id, f"❌ Search failed: {e}")
         return
-    
+
     if not results:
         send_message(chat_id, f"No permits found for \"{query}\". Try different keywords.")
         return
-    
+
     # Parse dates from original text
     start_date, end_date, date_desc = parse_month_range(original_text)
-    
+
+    # Limit to top 10 results
+    results = results[:10]
+
     if len(results) == 1:
-        # Single result — offer to track immediately
+        # Single result — store as conversation state for "yes"/"all"/"1" selection
         r = results[0]
+        _store_conv_state(chat_id, results, start_date, end_date)
         send_message(chat_id,
-            f"🏕 Found: <b>{r['name']}</b>\n"
-            f"📍 {r.get('location', 'Unknown location')}\n"
+            f"Found 1 permit:\n\n"
+            f"1. <b>{r['name']}</b>\n"
+            f"   📍 {r.get('location', 'Unknown location')}\n"
+            f"   ID: <code>{r['id']}</code>\n\n"
             f"📅 Dates: {date_desc} ({start_date} → {end_date})\n\n"
-            f"Shall I track this? Reply <b>yes</b> or tap:\n"
-            f"/track {r['id']} {start_date} {end_date}"
+            f"Reply: <b>yes</b> to track it, or <b>cancel</b> to skip"
         )
-        # Store pending action for "yes" response
-        _store_pending(chat_id, {
-            "action": "track",
-            "permit_id": r["id"],
-            "start_date": start_date,
-            "end_date": end_date,
-        })
     else:
-        # Multiple results — show top matches
-        lines = [f"Found {len(results)} permit(s) for \"<b>{query}</b>\":\n"]
-        for i, r in enumerate(results[:5], 1):
+        # Multiple results — show numbered list and store state
+        _store_conv_state(chat_id, results, start_date, end_date)
+
+        lines = [f"Found {len(results)} permit(s):\n"]
+        for i, r in enumerate(results, 1):
             loc = f" — 📍 {r['location']}" if r.get('location') else ""
-            lines.append(f"{i}. <b>{r['name']}</b>{loc}\n   /track {r['id']} {start_date} {end_date}")
-        
-        if len(results) > 5:
-            lines.append(f"\n... and {len(results) - 5} more. Try a more specific search.")
-        
-        lines.append(f"\n📅 Dates: {date_desc}")
-        lines.append("Tap a /track link above to start monitoring!")
+            lines.append(f"{i}. <b>{r['name']}</b>{loc}\n   ID: <code>{r['id']}</code>")
+
+        lines.append(f"\n📅 Dates: {date_desc} ({start_date} → {end_date})")
+        lines.append(f"\nReply: \"<b>all</b>\" to track everything, \"<b>1 and 3</b>\", \"<b>just 2</b>\", or \"<b>cancel</b>\"")
         send_message(chat_id, "\n".join(lines))
 
 
@@ -628,6 +650,189 @@ def _get_pending(chat_id):
             return p["action"]
         del _pending_actions[key]
     return None
+
+
+# ---------------------------------------------------------------------------
+# Conversation state management (multi-step search → select → create)
+# ---------------------------------------------------------------------------
+
+ORDINALS = {
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+}
+
+
+def _store_conv_state(chat_id, results, start_date, end_date):
+    """Store search results for a pending selection."""
+    CONV_STATE[str(chat_id)] = {
+        "results": results,
+        "date_range": {"start": start_date, "end": end_date},
+        "timestamp": time.time(),
+    }
+
+
+def _get_conv_state(chat_id):
+    """Get pending search results, or None if expired/missing."""
+    key = str(chat_id)
+    state = CONV_STATE.get(key)
+    if not state:
+        return None
+    # Expire after 10 minutes
+    if time.time() - state["timestamp"] > 600:
+        del CONV_STATE[key]
+        return None
+    return state
+
+
+def _clear_conv_state(chat_id):
+    CONV_STATE.pop(str(chat_id), None)
+
+
+def parse_selection(text, max_index):
+    """Parse user's selection from natural language.
+
+    Returns:
+        list of 0-based indices, or
+        'all' if user wants everything, or
+        'cancel' if user wants to cancel, or
+        None if unparseable.
+    """
+    lower = text.lower().strip()
+
+    # Cancel patterns
+    if lower in ("none", "cancel", "nevermind", "never mind", "nah", "no", "nope", "skip", "n"):
+        return "cancel"
+
+    # All patterns
+    if lower in ("all", "yes", "track all", "everything", "all of them", "track everything", "yep", "y", "sure"):
+        return "all"
+
+    indices = set()
+
+    # Replace ordinals with numbers
+    for word, num in ORDINALS.items():
+        lower = re.sub(r'\b' + word + r'\b', str(num), lower)
+
+    # Parse ranges like "1-3" or "1 through 3" or "1 to 3"
+    for m in re.finditer(r'(\d+)\s*(?:-|through|thru|to)\s*(\d+)', lower):
+        start, end = int(m.group(1)), int(m.group(2))
+        for i in range(start, end + 1):
+            if 1 <= i <= max_index:
+                indices.add(i - 1)
+
+    # Parse individual numbers (after ranges so we don't double-count)
+    # Remove already-matched ranges first
+    remaining = re.sub(r'(\d+)\s*(?:-|through|thru|to)\s*(\d+)', '', lower)
+    for m in re.finditer(r'(\d+)', remaining):
+        num = int(m.group(1))
+        if 1 <= num <= max_index:
+            indices.add(num - 1)
+
+    if indices:
+        return sorted(indices)
+
+    return None
+
+
+def _get_user_prefs(chat_id):
+    """Read user_preferences from DB, return dict with notification settings."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM user_preferences ORDER BY id DESC LIMIT 1").fetchone()
+        conn.close()
+        if row:
+            return {
+                "notify_email": row["notify_email"] if "notify_email" in row.keys() else "",
+                "notify_ntfy_topic": row["notify_ntfy_topic"] if "notify_ntfy_topic" in row.keys() else "",
+                "notify_sms_phone": row["notify_sms_phone"] if "notify_sms_phone" in row.keys() else "",
+                "notify_sms_carrier": row["notify_sms_carrier"] if "notify_sms_carrier" in row.keys() else "",
+                "notify_telegram_chat_id": row["notify_telegram_chat_id"] if "notify_telegram_chat_id" in row.keys() else "",
+            }
+    except Exception as e:
+        log.error("Failed to load user_preferences: %s", e)
+    return {}
+
+
+def _create_tracker_from_selection(chat_id, permit, start_date, end_date):
+    """Create a tracker in the DB for a given permit, auto-filling notifications."""
+    prefs = _get_user_prefs(chat_id)
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """INSERT INTO trackers
+           (permit_id, permit_name, division_ids, start_date, end_date,
+            notify_email, notify_ntfy_topic, notify_sms_phone, notify_sms_carrier,
+            notify_telegram_chat_id, active)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+        (
+            permit["id"],
+            permit["name"],
+            json.dumps([]),
+            start_date,
+            end_date,
+            prefs.get("notify_email", ""),
+            prefs.get("notify_ntfy_topic", ""),
+            prefs.get("notify_sms_phone", ""),
+            prefs.get("notify_sms_carrier", ""),
+            str(chat_id),  # Always use the user's Telegram chat_id
+        ),
+    )
+    tracker_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.commit()
+    conn.close()
+    return tracker_id
+
+
+def handle_selection(chat_id, user_id, text):
+    """Handle user's selection from pending search results. Returns True if handled."""
+    state = _get_conv_state(chat_id)
+    if not state:
+        return False
+
+    results = state["results"]
+    start_date = state["date_range"]["start"]
+    end_date = state["date_range"]["end"]
+
+    selection = parse_selection(text, len(results))
+
+    if selection is None:
+        return False  # Not a selection — treat as new query
+
+    _clear_conv_state(chat_id)
+
+    if selection == "cancel":
+        send_message(chat_id, "👍 Cancelled. Send me a new search anytime!")
+        return True
+
+    if selection == "all":
+        selected = list(range(len(results)))
+    else:
+        selected = selection
+
+    # Create trackers for selected permits
+    created_ids = []
+    created_names = []
+    for idx in selected:
+        permit = results[idx]
+        try:
+            tracker_id = _create_tracker_from_selection(chat_id, permit, start_date, end_date)
+            created_ids.append(tracker_id)
+            created_names.append(permit["name"])
+        except Exception as e:
+            log.error("Failed to create tracker for %s: %s", permit["name"], e)
+            send_message(chat_id, f"⚠️ Failed to create tracker for {permit['name']}: {e}")
+
+    if created_ids:
+        names_text = "\n".join(f"  • {name} (#{tid})" for name, tid in zip(created_names, created_ids))
+        send_message(chat_id,
+            f"✅ Created {len(created_ids)} tracker(s)!\n\n"
+            f"{names_text}\n\n"
+            f"📅 {start_date} → {end_date}\n"
+            f"🔔 You'll get a Telegram notification here when spots open up.\n"
+            f"Checking every 10 minutes!"
+        )
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -701,11 +906,11 @@ def run_polling():
 
     log.info("🤖 Permit Tracker Bot starting... (@Permit_tracker_bot)")
     
-    # Ensure DB has telegram_chat_id column
+    # Ensure DB has notify_telegram_chat_id column (init_db handles this, but just in case)
     conn = sqlite3.connect(DB_PATH)
     try:
-        conn.execute("ALTER TABLE trackers ADD COLUMN telegram_chat_id TEXT DEFAULT NULL")
-        log.info("Added telegram_chat_id column to trackers table")
+        conn.execute("ALTER TABLE trackers ADD COLUMN notify_telegram_chat_id TEXT DEFAULT ''")
+        log.info("Added notify_telegram_chat_id column to trackers table")
     except sqlite3.OperationalError:
         pass  # Column already exists
     conn.close()

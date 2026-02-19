@@ -166,7 +166,7 @@
 
 <footer>
   <div class="container">
-    <p>Checks recreation.gov every 10 minutes &bull; Data from <a href="https://www.recreation.gov" target="_blank">recreation.gov</a></p>
+    <p>Checks recreation.gov every 20 minutes &bull; Data from <a href="https://www.recreation.gov" target="_blank">recreation.gov</a></p>
   </div>
 </footer>
 
@@ -184,11 +184,11 @@
       <button class="chat-close" onclick="toggleChat()">&times;</button>
     </div>
     <div id="chat-messages" class="chat-messages">
-      <div class="chat-msg chat-bot">Hi! I can help you manage trackers. Try:<br>
-        <em>"track Half Dome permits for July"</em><br>
-        <em>"what am I tracking?"</em><br>
-        <em>"delete tracker 3"</em><br>
-        Type <strong>help</strong> for all commands.</div>
+      <div class="chat-msg chat-bot">Hi! Just tell me what permits you're looking for:<br>
+        <em>"river permits in Colorado for August"</em><br>
+        <em>"track Maroon Bells July through September"</em><br>
+        <em>"any Half Dome availability this summer?"</em><br>
+        I'll search and let you pick which to track!</div>
     </div>
     <div class="chat-input-bar">
       <input type="text" id="chat-input" placeholder="e.g. track Enchantments for August..." autocomplete="off">
@@ -763,9 +763,11 @@ async function savePreferences() {
 }
 
 // ---------------------------------------------------------------------------
-// Chat interface — natural language command parser
+// Chat interface — natural language conversational tracker creation
 // ---------------------------------------------------------------------------
 let chatOpen = false;
+// Conversation state for multi-step search → select → create flow
+let chatState = null; // {results: [...], dateRange: {start, end}, timestamp: number}
 
 function toggleChat() {
   chatOpen = !chatOpen;
@@ -856,12 +858,98 @@ function extractPermitName(text) {
   const filler = ['track','watch','monitor','alert','notify','me','to','for','in','on',
     'check','show','search','find','look','up','any','the','a','an','at','of',
     'permits','permit','availability','available','spots','openings','during','from',
-    'through','this','next','please','can','you','i','want','would','like'];
+    'through','this','next','please','can','you','i','want','would','like',
+    'what','which','are','is','there','get','with','about','river','wilderness'];
   // Also remove month/season words
   const dateWords = Object.keys(MONTHS).concat(Object.keys(SEASONS));
   const removeWords = new Set([...filler, ...dateWords]);
   const words = text.split(/\s+/).filter(w => !removeWords.has(w.toLowerCase()) && !/^\d+$/.test(w));
   return words.join(' ').trim();
+}
+
+const ORDINALS = {first:1, second:2, third:3, fourth:4, fifth:5, sixth:6, seventh:7, eighth:8, ninth:9, tenth:10};
+
+function parseSelection(text, maxIndex) {
+  let lower = text.toLowerCase().trim();
+  // Cancel patterns
+  if (['none','cancel','nevermind','never mind','nah','no','nope','skip','n'].includes(lower)) return 'cancel';
+  // All patterns
+  if (['all','yes','track all','everything','all of them','track everything','yep','y','sure'].includes(lower)) return 'all';
+
+  // Replace ordinals with numbers
+  for (const [word, num] of Object.entries(ORDINALS)) {
+    lower = lower.replace(new RegExp('\\b' + word + '\\b', 'g'), String(num));
+  }
+
+  const indices = new Set();
+  // Parse ranges like "1-3" or "1 through 3"
+  let remaining = lower;
+  for (const m of lower.matchAll(/(\d+)\s*(?:-|through|thru|to)\s*(\d+)/g)) {
+    const start = parseInt(m[1]), end = parseInt(m[2]);
+    for (let i = start; i <= end; i++) {
+      if (i >= 1 && i <= maxIndex) indices.add(i - 1);
+    }
+    remaining = remaining.replace(m[0], '');
+  }
+  // Parse individual numbers
+  for (const m of remaining.matchAll(/(\d+)/g)) {
+    const num = parseInt(m[1]);
+    if (num >= 1 && num <= maxIndex) indices.add(num - 1);
+  }
+
+  if (indices.size > 0) return [...indices].sort((a,b) => a - b);
+  return null;
+}
+
+async function createTrackersFromSelection(selectedIndices) {
+  const results = chatState.results;
+  const dateRange = chatState.dateRange;
+  const prefs = savedPreferences;
+  chatState = null; // Clear state
+
+  // Check if notifications are configured
+  if (!prefs.notify_telegram_chat_id && !prefs.notify_email && !prefs.notify_ntfy_topic && !prefs.notify_sms_phone) {
+    addChatMsg(`Set up notification preferences in the form above first, then try again.`, false);
+    return;
+  }
+
+  const created = [];
+  for (const idx of selectedIndices) {
+    const p = results[idx];
+    try {
+      const body = {
+        permit_id: p.id,
+        permit_name: p.name,
+        division_ids: [],
+        start_date: dateRange.start,
+        end_date: dateRange.end,
+        notify_email: prefs.notify_email || '',
+        notify_telegram_chat_id: prefs.notify_telegram_chat_id || '',
+        notify_ntfy_topic: prefs.notify_ntfy_topic || '',
+        notify_sms_phone: prefs.notify_sms_phone || '',
+        notify_sms_carrier: prefs.notify_sms_carrier || '',
+      };
+      const resp = await fetch('/api/trackers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (!data.error) created.push({ name: p.name, id: data.id });
+    } catch (err) {
+      addChatMsg(`Failed to create tracker for ${esc(p.name)}: ${err.message}`, false);
+    }
+  }
+
+  if (created.length > 0) {
+    const names = created.map(c => `<strong>${esc(c.name)}</strong> (#${c.id})`).join('<br>');
+    addChatMsg(
+      `✅ Created ${created.length} tracker(s)!<br><br>${names}<br><br>` +
+      `📅 ${dateRange.start} → ${dateRange.end}<br>` +
+      `Checking every 10 min. You'll get a notification when spots open!`, false
+    );
+    loadTrackers();
+  }
 }
 
 async function sendChat() {
@@ -873,13 +961,43 @@ async function sendChat() {
 
   const lower = text.toLowerCase().trim();
 
+  // --- Step 1: Check if user is responding to pending selection ---
+  if (chatState && chatState.results) {
+    // Expire after 10 minutes
+    if (Date.now() - chatState.timestamp > 600000) {
+      chatState = null;
+    } else {
+      const selection = parseSelection(text, chatState.results.length);
+      if (selection === 'cancel') {
+        chatState = null;
+        addChatMsg('👍 Cancelled. Send me a new search anytime!', false);
+        return;
+      }
+      if (selection === 'all') {
+        await createTrackersFromSelection([...Array(chatState.results.length).keys()]);
+        return;
+      }
+      if (Array.isArray(selection)) {
+        await createTrackersFromSelection(selection);
+        return;
+      }
+      // selection is null — not a selection, treat as new query (fall through)
+      chatState = null;
+    }
+  }
+
+  // --- Step 2: Handle explicit commands ---
+
   // Help command
   if (/^help$/i.test(lower)) {
-    addChatMsg(`<strong>Commands:</strong><br>
-      <em>track [permit] for [month/season]</em> — search &amp; set up tracking<br>
-      <em>check [permit]</em> or <em>show [permit]</em> — search for availability<br>
-      <em>list</em> or <em>status</em> or <em>what am I tracking</em> — show trackers<br>
-      <em>delete tracker [id]</em> or <em>remove [id]</em> — delete a tracker<br>
+    addChatMsg(`<strong>Just type naturally!</strong><br>
+      <em>"river permits in Colorado for August"</em><br>
+      <em>"track Maroon Bells July through September"</em><br>
+      <em>"any Half Dome availability this summer?"</em><br><br>
+      I'll search, show numbered results, and you pick which to track.<br><br>
+      <strong>Other commands:</strong><br>
+      <em>list</em> / <em>status</em> — show active trackers<br>
+      <em>delete tracker [id]</em> — remove a tracker<br>
       <em>help</em> — show this message`, false);
     return;
   }
@@ -913,90 +1031,51 @@ async function sendChat() {
     return;
   }
 
-  // Track / watch command — search then create
-  const isTrack = /^(track|watch|monitor|alert|notify)\b/i.test(lower);
-  if (isTrack) {
-    const permitName = extractPermitName(text);
-    if (!permitName) {
-      addChatMsg("What permit would you like to track? e.g. <em>track Half Dome for July</em>", false);
-      return;
-    }
-    const dateRange = parseDateRange(text);
-    addChatMsg(`Searching for "${esc(permitName)}"...`, false);
-    try {
-      const resp = await fetch(`/api/search?q=${encodeURIComponent(permitName)}`);
-      const results = await resp.json();
-      if (results.error || results.length === 0) {
-        addChatMsg(`No permits found for "${esc(permitName)}". Try a different name.`, false);
-        return;
-      }
-      const p = results[0]; // Best match
-      // Check if we have saved notification preferences
-      const prefs = savedPreferences;
-      if (!prefs.notify_telegram_chat_id && !prefs.notify_email && !prefs.notify_ntfy_topic && !prefs.notify_sms_phone) {
-        addChatMsg(`Found <strong>${esc(p.name)}</strong>. Set up notification preferences in the form above first, then try again.`, false);
-        selectPermit(p.id, p.name, p.location);
-        return;
-      }
-      // Create tracker with saved prefs
-      const body = {
-        permit_id: p.id,
-        permit_name: p.name,
-        division_ids: [],
-        start_date: dateRange.start,
-        end_date: dateRange.end,
-        notify_email: prefs.notify_email || '',
-        notify_telegram_chat_id: prefs.notify_telegram_chat_id || '',
-        notify_ntfy_topic: prefs.notify_ntfy_topic || '',
-        notify_sms_phone: prefs.notify_sms_phone || '',
-        notify_sms_carrier: prefs.notify_sms_carrier || '',
-      };
-      const createResp = await fetch('/api/trackers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const createData = await createResp.json();
-      if (createData.error) {
-        addChatMsg(`Error: ${createData.error}`, false);
-      } else {
-        addChatMsg(`Tracking <strong>${esc(p.name)}</strong> from ${dateRange.start} to ${dateRange.end}. Tracker #${createData.id} created!`, false);
-        loadTrackers();
-      }
-    } catch (err) {
-      addChatMsg(`Search failed: ${err.message}`, false);
-    }
+  // --- Step 3: Treat as a natural language search query ---
+  const permitName = extractPermitName(text);
+  if (!permitName || permitName.length < 2) {
+    addChatMsg("I didn't understand that. Try something like: <em>river permits in Colorado for August</em><br>Type <strong>help</strong> for more.", false);
     return;
   }
 
-  // Check / show / search command
-  const isCheck = /^(check|show|search|find|look)\b/i.test(lower);
-  if (isCheck) {
-    const permitName = extractPermitName(text);
-    if (!permitName) {
-      addChatMsg("What permit should I search? e.g. <em>check Half Dome</em>", false);
+  const dateRange = parseDateRange(text);
+  addChatMsg(`🔍 Searching for "${esc(permitName)}"...`, false);
+
+  try {
+    const resp = await fetch(`/api/search?q=${encodeURIComponent(permitName)}`);
+    const results = await resp.json();
+    if (results.error || results.length === 0) {
+      addChatMsg(`No permits found for "${esc(permitName)}". Try different keywords.`, false);
       return;
     }
-    addChatMsg(`Searching for "${esc(permitName)}"...`, false);
-    try {
-      const resp = await fetch(`/api/search?q=${encodeURIComponent(permitName)}`);
-      const results = await resp.json();
-      if (results.error || results.length === 0) {
-        addChatMsg(`No permits found for "${esc(permitName)}".`, false);
-        return;
-      }
-      const lines = results.slice(0, 5).map(p =>
-        `<strong>${esc(p.name)}</strong><br><span style="color:var(--gray-500);font-size:0.85em">${esc(p.location)} (ID: ${p.id})</span>`
-      ).join('<br><br>');
-      addChatMsg(lines, false);
-    } catch (err) {
-      addChatMsg(`Search failed: ${err.message}`, false);
-    }
-    return;
-  }
 
-  // Fallback
-  addChatMsg("I didn't understand that. Type <strong>help</strong> to see what I can do.", false);
+    const limited = results.slice(0, 10);
+    // Store conversation state
+    chatState = { results: limited, dateRange, timestamp: Date.now() };
+
+    if (limited.length === 1) {
+      const p = limited[0];
+      addChatMsg(
+        `Found 1 permit:<br><br>` +
+        `1. <strong>${esc(p.name)}</strong><br>` +
+        `&nbsp;&nbsp;&nbsp;📍 ${esc(p.location)} (ID: ${p.id})<br><br>` +
+        `📅 ${dateRange.start} → ${dateRange.end}<br><br>` +
+        `Reply: <strong>yes</strong> to track it, or <strong>cancel</strong> to skip`, false
+      );
+    } else {
+      const lines = limited.map((p, i) =>
+        `${i+1}. <strong>${esc(p.name)}</strong><br>&nbsp;&nbsp;&nbsp;📍 ${esc(p.location)} (ID: ${p.id})`
+      ).join('<br>');
+      addChatMsg(
+        `Found ${limited.length} permit(s):<br><br>` +
+        `${lines}<br><br>` +
+        `📅 ${dateRange.start} → ${dateRange.end}<br><br>` +
+        `Reply: "<strong>all</strong>" to track everything, "<strong>1 and 3</strong>", "<strong>just 2</strong>", or "<strong>cancel</strong>"`, false
+      );
+    }
+  } catch (err) {
+    addChatMsg(`Search failed: ${err.message}`, false);
+  }
 }
 
 // ---------------------------------------------------------------------------
