@@ -740,3 +740,129 @@ footer a:hover { text-decoration: underline; }
     right: 0;
   }
 }
+
+/* ================================================================
+   Notification Cards — friendly setup UX
+   ================================================================ */
+
+.notif-card {
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.notif-card:hover {
+  border-color: #d1d5db;
+}
+
+.notif-primary {
+  border-color: var(--green);
+  background: var(--green-light);
+}
+
+.notif-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  cursor: default;
+}
+
+details.notif-card .notif-card-header {
+  cursor: pointer;
+}
+
+.notif-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.notif-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 99px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.notif-recommended {
+  background: var(--green);
+  color: white;
+}
+
+.notif-optional-badge {
+  background: #e5e7eb;
+  color: #6b7280;
+}
+
+.notif-desc {
+  font-size: 0.85rem;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.notif-card-body {
+  padding: 0 16px 16px;
+}
+
+.setup-steps {
+  font-size: 0.9rem;
+  padding-left: 20px;
+  margin: 8px 0 12px;
+  line-height: 1.7;
+}
+
+.setup-steps code {
+  background: rgba(0,0,0,0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.test-result {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: opacity 0.3s;
+}
+
+.test-success {
+  background: var(--green-light);
+  color: var(--green);
+}
+
+.test-fail {
+  background: var(--red-light);
+  color: var(--red);
+}
+
+.notif-optional {
+  border-color: #e5e7eb;
+}
+
+.notif-optional summary {
+  list-style: none;
+}
+
+.notif-optional summary::-webkit-details-marker {
+  display: none;
+}
+
+.notif-optional summary::after {
+  content: '▸';
+  float: right;
+  transition: transform 0.2s;
+  color: #9ca3af;
+}
+
+.notif-optional[open] summary::after {
+  transform: rotate(90deg);
+}

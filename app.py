@@ -8,7 +8,9 @@ and sending notifications when slots open up.
 import json
 import logging
 import os
+import random
 import sqlite3
+import string
 from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -127,6 +129,7 @@ def init_db():
             notify_ntfy_topic TEXT DEFAULT '',
             notify_sms_phone TEXT DEFAULT '',
             notify_sms_carrier TEXT DEFAULT '',
+            notify_telegram_chat_id TEXT DEFAULT '',
             active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             last_checked_at TEXT DEFAULT NULL
@@ -156,10 +159,20 @@ def init_db():
             notify_ntfy_topic TEXT DEFAULT '',
             notify_sms_phone TEXT DEFAULT '',
             notify_sms_carrier TEXT DEFAULT '',
+            notify_telegram_chat_id TEXT DEFAULT '',
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         """
     )
+    # Migrate: add telegram column if missing (existing DBs won't have it)
+    try:
+        conn.execute("ALTER TABLE trackers ADD COLUMN notify_telegram_chat_id TEXT DEFAULT ''")
+    except Exception:
+        pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE user_preferences ADD COLUMN notify_telegram_chat_id TEXT DEFAULT ''")
+    except Exception:
+        pass
     conn.close()
     log.info("Database initialized at %s", DB_PATH)
 
@@ -334,11 +347,12 @@ def api_list_trackers():
     trackers = [dict(r) for r in rows]
     for t in trackers:
         t["division_ids"] = json.loads(t["division_ids"])
-        # Count alerts sent for this tracker
+        # Count alerts and get last notification time
         count_row = db.execute(
-            "SELECT COUNT(*) as cnt FROM alerts WHERE tracker_id = ?", (t["id"],)
+            "SELECT COUNT(*) as cnt, MAX(created_at) as last_at FROM alerts WHERE tracker_id = ?", (t["id"],)
         ).fetchone()
         t["alert_count"] = count_row["cnt"] if count_row else 0
+        t["last_notified_at"] = count_row["last_at"] if count_row else None
     return jsonify(trackers)
 
 
@@ -359,8 +373,9 @@ def api_create_tracker():
     cursor = db.execute(
         """INSERT INTO trackers
            (permit_id, permit_name, division_ids, start_date, end_date,
-            notify_email, notify_ntfy_topic, notify_sms_phone, notify_sms_carrier)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            notify_email, notify_ntfy_topic, notify_sms_phone, notify_sms_carrier,
+            notify_telegram_chat_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             data["permit_id"],
             data["permit_name"],
@@ -371,6 +386,7 @@ def api_create_tracker():
             data.get("notify_ntfy_topic", ""),
             data.get("notify_sms_phone", ""),
             data.get("notify_sms_carrier", ""),
+            data.get("notify_telegram_chat_id", ""),
         ),
     )
     db.commit()
@@ -432,8 +448,8 @@ def api_test_notification():
         return jsonify({"error": "JSON body required"}), 400
 
     notif_type = data.get("type", "")
-    if notif_type not in ("email", "ntfy", "sms"):
-        return jsonify({"error": "type must be email, ntfy, or sms"}), 400
+    if notif_type not in ("email", "ntfy", "sms", "telegram"):
+        return jsonify({"error": "type must be email, ntfy, sms, or telegram"}), 400
 
     result = send_test_notification(
         notif_type,
@@ -441,6 +457,7 @@ def api_test_notification():
         ntfy_topic=data.get("ntfy_topic", ""),
         sms_phone=data.get("sms_phone", ""),
         sms_carrier=data.get("sms_carrier", ""),
+        telegram_chat_id=data.get("telegram_chat_id", ""),
     )
     return jsonify(result)
 
@@ -456,10 +473,12 @@ def api_test_all_notifications(tracker_id):
 
     t = dict(row)
     results = []
-    if t.get("notify_email"):
-        results.append(send_test_notification("email", email=t["notify_email"]))
+    if t.get("notify_telegram_chat_id"):
+        results.append(send_test_notification("telegram", telegram_chat_id=t["notify_telegram_chat_id"]))
     if t.get("notify_ntfy_topic"):
         results.append(send_test_notification("ntfy", ntfy_topic=t["notify_ntfy_topic"]))
+    if t.get("notify_email"):
+        results.append(send_test_notification("email", email=t["notify_email"]))
     if t.get("notify_sms_phone") and t.get("notify_sms_carrier"):
         results.append(send_test_notification("sms", sms_phone=t["notify_sms_phone"], sms_carrier=t["notify_sms_carrier"]))
 
@@ -496,6 +515,15 @@ def api_check_now(tracker_id):
 # User Preferences API
 # ---------------------------------------------------------------------------
 
+@app.route("/api/generate-topic", methods=["POST"])
+@login_required
+def api_generate_topic():
+    """Generate a unique ntfy topic name."""
+    suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    topic = f"permit-tracker-{suffix}"
+    return jsonify({"topic": topic})
+
+
 @app.route("/api/preferences", methods=["GET"])
 @login_required
 def api_get_preferences():
@@ -503,13 +531,16 @@ def api_get_preferences():
     db = get_db()
     row = db.execute("SELECT * FROM user_preferences ORDER BY id DESC LIMIT 1").fetchone()
     if row:
-        return jsonify({
-            "notify_email": row["notify_email"],
-            "notify_ntfy_topic": row["notify_ntfy_topic"],
-            "notify_sms_phone": row["notify_sms_phone"],
-            "notify_sms_carrier": row["notify_sms_carrier"],
-        })
-    return jsonify({})
+        prefs = {
+            "notify_email": row["notify_email"] if "notify_email" in row.keys() else "",
+            "notify_ntfy_topic": row["notify_ntfy_topic"] if "notify_ntfy_topic" in row.keys() else "",
+            "notify_sms_phone": row["notify_sms_phone"] if "notify_sms_phone" in row.keys() else "",
+            "notify_sms_carrier": row["notify_sms_carrier"] if "notify_sms_carrier" in row.keys() else "",
+            "notify_telegram_chat_id": row["notify_telegram_chat_id"] if "notify_telegram_chat_id" in row.keys() else "",
+        }
+        prefs["setup_complete"] = bool(prefs.get("notify_telegram_chat_id") or prefs.get("notify_ntfy_topic") or prefs.get("notify_email"))
+        return jsonify(prefs)
+    return jsonify({"setup_complete": False})
 
 
 @app.route("/api/preferences", methods=["POST"])
@@ -521,13 +552,14 @@ def api_save_preferences():
     # Upsert — delete old, insert new
     db.execute("DELETE FROM user_preferences")
     db.execute(
-        """INSERT INTO user_preferences (notify_email, notify_ntfy_topic, notify_sms_phone, notify_sms_carrier)
-           VALUES (?, ?, ?, ?)""",
+        """INSERT INTO user_preferences (notify_email, notify_ntfy_topic, notify_sms_phone, notify_sms_carrier, notify_telegram_chat_id)
+           VALUES (?, ?, ?, ?, ?)""",
         (
             data.get("notify_email", ""),
             data.get("notify_ntfy_topic", ""),
             data.get("notify_sms_phone", ""),
             data.get("notify_sms_carrier", ""),
+            data.get("notify_telegram_chat_id", ""),
         )
     )
     db.commit()

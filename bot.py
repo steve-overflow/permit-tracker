@@ -102,13 +102,15 @@ def authorize_user(user_id):
 # ---------------------------------------------------------------------------
 
 def handle_start(chat_id, user_id, args, first_name):
+    chat_id_msg = f"\n\n📋 *Your Chat ID:* `{chat_id}`\nCopy this into the web app to get Telegram notifications!"
+
     if not ACCESS_CODE:
         authorize_user(user_id)
-        send_message(chat_id, f"👋 Welcome {first_name}! No access code required.\n\nUse /help to see commands.")
+        send_message(chat_id, f"👋 Welcome {first_name}! No access code required.{chat_id_msg}\n\nUse /help to see commands.", parse_mode="Markdown")
         return
 
     if is_authorized(user_id):
-        send_message(chat_id, f"👋 Welcome back {first_name}! You're already verified.\n\nUse /help to see commands.")
+        send_message(chat_id, f"👋 Welcome back {first_name}! You're already verified.{chat_id_msg}\n\nUse /help to see commands.", parse_mode="Markdown")
         return
 
     if not args:
@@ -117,9 +119,13 @@ def handle_start(chat_id, user_id, args, first_name):
 
     if args.strip() == ACCESS_CODE:
         authorize_user(user_id)
-        send_message(chat_id, f"✅ Access granted! Welcome {first_name}.\n\nUse /help to see what I can do.")
+        send_message(chat_id, f"✅ Access granted! Welcome {first_name}.{chat_id_msg}\n\nUse /help to see what I can do.", parse_mode="Markdown")
     else:
         send_message(chat_id, "❌ Invalid access code. Try again with /start <code>")
+
+
+def handle_chatid(chat_id):
+    send_message(chat_id, f"📋 Your Chat ID is: <code>{chat_id}</code>\n\nCopy this into the Permit Tracker web app to receive Telegram notifications!")
 
 
 def handle_help(chat_id):
@@ -132,6 +138,7 @@ def handle_help(chat_id):
 /check &lt;tracker_id&gt; — Run immediate check
 /checkall — Check all trackers now
 /stop &lt;tracker_id&gt; — Stop tracking
+/chatid — Show your Chat ID (for web app notifications)
 /report &lt;issue&gt; — Report a bug or request a feature
 /help — Show this message
 
@@ -634,6 +641,8 @@ def process_update(update):
 
         if command == "/help":
             handle_help(chat_id)
+        elif command == "/chatid":
+            handle_chatid(chat_id)
         elif command == "/search":
             handle_search(chat_id, args)
         elif command == "/track":

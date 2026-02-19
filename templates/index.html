@@ -57,46 +57,77 @@
       </div>
     </div>
 
-    <h3>Notifications</h3>
-    <p class="hint">Set up at least one notification method</p>
+    <h3>📱 Notifications</h3>
+    <p class="hint">How should we alert you when spots open up?</p>
 
-    <div class="form-group">
-      <label for="notify-email">Email (via Resend)</label>
-      <div class="input-with-btn">
-        <input type="email" id="notify-email" placeholder="you@example.com">
-        <button class="btn-test" onclick="testNotification('email')">Test</button>
-      </div>
-    </div>
-
-    <div class="form-group">
-      <label for="notify-ntfy">ntfy.sh Topic</label>
-      <div class="input-with-btn">
-        <input type="text" id="notify-ntfy" placeholder="my-permit-alerts">
-        <button class="btn-test" onclick="testNotification('ntfy')">Test</button>
-      </div>
-      <span class="hint">Install <a href="https://ntfy.sh" target="_blank">ntfy app</a> and subscribe to this topic</span>
-    </div>
-
-    <div class="form-row">
-      <div class="form-group">
-        <label for="notify-phone">Phone (SMS)</label>
-        <input type="tel" id="notify-phone" placeholder="5551234567">
-      </div>
-      <div class="form-group">
-        <label for="notify-carrier">Carrier</label>
-        <div class="input-with-btn">
-          <select id="notify-carrier">
-            <option value="">-- Select --</option>
-            <option value="verizon">Verizon</option>
-            <option value="att">AT&T</option>
-            <option value="tmobile">T-Mobile</option>
-            <option value="sprint">Sprint</option>
-          </select>
-          <button class="btn-test" onclick="testNotification('sms')">Test</button>
+    <!-- Telegram — PRIMARY -->
+    <div class="notif-card notif-primary" id="telegram-setup">
+      <div class="notif-card-header">
+        <span class="notif-icon">✈️</span>
+        <div>
+          <strong>Telegram</strong> <span class="notif-badge notif-recommended">Recommended</span>
+          <div class="notif-desc">Get alerts right in Telegram — instant and reliable</div>
         </div>
       </div>
+      <div class="notif-card-body">
+        <ol class="setup-steps">
+          <li>Open <a href="https://t.me/Permit_tracker_bot" target="_blank">@Permit_tracker_bot</a> in Telegram</li>
+          <li>Send: <code>/start permit2025!</code></li>
+          <li>The bot will reply with your Chat ID — paste it below</li>
+        </ol>
+        <div class="input-with-btn">
+          <input type="text" id="notify-telegram" placeholder="Your Telegram Chat ID (e.g. 123456789)">
+          <button class="btn-test" onclick="testNotification('telegram')">📤 Test</button>
+        </div>
+        <div id="telegram-test-result" class="test-result hidden"></div>
+      </div>
     </div>
-    <p class="hint sms-warning">SMS requires a verified Resend domain. The default sandbox sender (onboarding@resend.dev) can only email the account owner &mdash; it cannot deliver to carrier SMS gateways.</p>
+
+    <!-- ntfy — SECONDARY -->
+    <div class="notif-card" id="ntfy-setup">
+      <div class="notif-card-header">
+        <span class="notif-icon">🔔</span>
+        <div>
+          <strong>Push Notifications (ntfy)</strong>
+          <div class="notif-desc">Free push notifications via <a href="https://ntfy.sh" target="_blank">ntfy.sh</a> — no account needed</div>
+        </div>
+      </div>
+      <div class="notif-card-body">
+        <ol class="setup-steps">
+          <li>Install the ntfy app: <a href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank">iOS</a> · <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank">Android</a></li>
+          <li>Subscribe to your topic (click Generate if you need one)</li>
+          <li>Hit Test to verify it works</li>
+        </ol>
+        <div class="input-with-btn">
+          <input type="text" id="notify-ntfy" placeholder="permit-tracker-yourname">
+          <button class="btn-sm" onclick="generateTopic()">Generate</button>
+          <button class="btn-test" onclick="testNotification('ntfy')">📤 Test</button>
+        </div>
+        <div id="ntfy-test-result" class="test-result hidden"></div>
+      </div>
+    </div>
+
+    <!-- Email — OPTIONAL, collapsed -->
+    <details class="notif-card notif-optional">
+      <summary class="notif-card-header">
+        <span class="notif-icon">📧</span>
+        <div>
+          <strong>Email</strong> <span class="notif-badge notif-optional-badge">Optional</span>
+          <div class="notif-desc">Get email alerts (may go to spam)</div>
+        </div>
+      </summary>
+      <div class="notif-card-body">
+        <div class="input-with-btn">
+          <input type="email" id="notify-email" placeholder="you@example.com">
+          <button class="btn-test" onclick="testNotification('email')">📤 Test</button>
+        </div>
+        <div id="email-test-result" class="test-result hidden"></div>
+      </div>
+    </details>
+
+    <!-- Hidden fields for SMS (kept for backward compat) -->
+    <input type="hidden" id="notify-phone" value="">
+    <input type="hidden" id="notify-carrier" value="">
 
     <button class="btn-primary" onclick="createTracker()">Start Tracking</button>
     <button class="btn-secondary" onclick="resetConfig()">Back to Search</button>
@@ -309,13 +340,14 @@ async function createTracker() {
     return;
   }
 
-  const email = document.getElementById('notify-email').value.trim();
+  const telegram = document.getElementById('notify-telegram').value.trim();
   const ntfy = document.getElementById('notify-ntfy').value.trim();
+  const email = document.getElementById('notify-email').value.trim();
   const phone = document.getElementById('notify-phone').value.trim();
   const carrier = document.getElementById('notify-carrier').value;
 
-  if (!email && !ntfy && !(phone && carrier)) {
-    alert('Please set up at least one notification method.');
+  if (!telegram && !ntfy && !email) {
+    alert('Please set up at least one notification method (Telegram recommended!)');
     return;
   }
 
@@ -328,8 +360,9 @@ async function createTracker() {
     division_ids: checkedDivs,
     start_date: startDate,
     end_date: endDate,
-    notify_email: email,
+    notify_telegram_chat_id: telegram,
     notify_ntfy_topic: ntfy,
+    notify_email: email,
     notify_sms_phone: phone,
     notify_sms_carrier: carrier,
   };
@@ -428,20 +461,16 @@ async function loadTrackers() {
       const nextIn = t.active ? nextCheckIn(t.last_checked_at) : '—';
       const alertCount = t.alert_count || 0;
 
-      // Notification channel badges with status color
+      // Notification channel badges — only show configured ones as green, skip unconfigured
       let channelBadges = '';
-      if (t.notify_email)
-        channelBadges += `<span class="channel-badge channel-on" title="Email: ${esc(t.notify_email)}">Email</span>`;
-      else
-        channelBadges += '<span class="channel-badge channel-off" title="Email not configured">Email</span>';
+      if (t.notify_telegram_chat_id)
+        channelBadges += `<span class="channel-badge channel-on" title="Telegram: ${esc(t.notify_telegram_chat_id)}">✈️ Telegram</span>`;
       if (t.notify_ntfy_topic)
-        channelBadges += `<span class="channel-badge channel-on" title="ntfy: ${esc(t.notify_ntfy_topic)}">Push</span>`;
-      else
-        channelBadges += '<span class="channel-badge channel-off" title="Push not configured">Push</span>';
-      if (t.notify_sms_phone)
-        channelBadges += `<span class="channel-badge channel-on" title="SMS: ${esc(t.notify_sms_phone)}">SMS</span>`;
-      else
-        channelBadges += '<span class="channel-badge channel-off" title="SMS not configured">SMS</span>';
+        channelBadges += `<span class="channel-badge channel-on" title="ntfy: ${esc(t.notify_ntfy_topic)}">🔔 Push</span>`;
+      if (t.notify_email)
+        channelBadges += `<span class="channel-badge channel-on" title="Email: ${esc(t.notify_email)}">📧 Email</span>`;
+      if (!channelBadges)
+        channelBadges = '<span class="channel-badge channel-off">⚠️ No notifications set up</span>';
 
       return `
         <div class="tracker-card ${health.cls}">
@@ -559,19 +588,24 @@ async function testNotification(type) {
   const btn = event.target;
   const origText = btn.textContent;
   btn.disabled = true;
-  btn.textContent = 'Sending...';
+  btn.textContent = '⏳ Sending...';
+
+  const resultEl = document.getElementById(`${type}-test-result`);
 
   const body = { type };
-  if (type === 'email') {
+  if (type === 'telegram') {
+    body.telegram_chat_id = document.getElementById('notify-telegram').value.trim();
+    if (!body.telegram_chat_id) { showTestResult(resultEl, false, 'Enter your Telegram Chat ID first'); btn.disabled = false; btn.textContent = origText; return; }
+  } else if (type === 'email') {
     body.email = document.getElementById('notify-email').value.trim();
-    if (!body.email) { alert('Enter an email address first.'); btn.disabled = false; btn.textContent = origText; return; }
+    if (!body.email) { showTestResult(resultEl, false, 'Enter an email address first'); btn.disabled = false; btn.textContent = origText; return; }
   } else if (type === 'ntfy') {
     body.ntfy_topic = document.getElementById('notify-ntfy').value.trim();
-    if (!body.ntfy_topic) { alert('Enter an ntfy topic first.'); btn.disabled = false; btn.textContent = origText; return; }
+    if (!body.ntfy_topic) { showTestResult(resultEl, false, 'Enter an ntfy topic first'); btn.disabled = false; btn.textContent = origText; return; }
   } else if (type === 'sms') {
     body.sms_phone = document.getElementById('notify-phone').value.trim();
     body.sms_carrier = document.getElementById('notify-carrier').value;
-    if (!body.sms_phone || !body.sms_carrier) { alert('Enter phone and select carrier first.'); btn.disabled = false; btn.textContent = origText; return; }
+    if (!body.sms_phone || !body.sms_carrier) { showTestResult(resultEl, false, 'Enter phone and carrier'); btn.disabled = false; btn.textContent = origText; return; }
   }
 
   try {
@@ -582,16 +616,24 @@ async function testNotification(type) {
     });
     const data = await resp.json();
     if (data.success) {
-      alert('Test notification sent successfully!');
+      showTestResult(resultEl, true, '✅ Sent! Check your ' + type);
     } else {
-      alert('Test failed: ' + (data.error || 'Unknown error'));
+      showTestResult(resultEl, false, '❌ ' + (data.error || 'Unknown error'));
     }
   } catch (err) {
-    alert('Test failed: ' + err.message);
+    showTestResult(resultEl, false, '❌ ' + err.message);
   } finally {
     btn.disabled = false;
     btn.textContent = origText;
   }
+}
+
+function showTestResult(el, success, msg) {
+  if (!el) { alert(msg); return; }
+  el.classList.remove('hidden');
+  el.className = `test-result ${success ? 'test-success' : 'test-fail'}`;
+  el.textContent = msg;
+  setTimeout(() => el.classList.add('hidden'), 8000);
 }
 
 // ---------------------------------------------------------------------------
@@ -655,18 +697,30 @@ async function loadPreferences() {
 
 function applyPreferences() {
   const p = savedPreferences;
-  if (p.notify_email) document.getElementById('notify-email').value = p.notify_email;
+  if (p.notify_telegram_chat_id) document.getElementById('notify-telegram').value = p.notify_telegram_chat_id;
   if (p.notify_ntfy_topic) document.getElementById('notify-ntfy').value = p.notify_ntfy_topic;
+  if (p.notify_email) document.getElementById('notify-email').value = p.notify_email;
   if (p.notify_sms_phone) document.getElementById('notify-phone').value = p.notify_sms_phone;
   if (p.notify_sms_carrier) document.getElementById('notify-carrier').value = p.notify_sms_carrier;
 }
 
+async function generateTopic() {
+  try {
+    const resp = await fetch('/api/generate-topic', { method: 'POST' });
+    const data = await resp.json();
+    document.getElementById('notify-ntfy').value = data.topic;
+  } catch (e) {
+    alert('Failed to generate topic');
+  }
+}
+
 async function savePreferences() {
-  const email = document.getElementById('notify-email')?.value?.trim() || '';
+  const telegram = document.getElementById('notify-telegram')?.value?.trim() || '';
   const ntfy = document.getElementById('notify-ntfy')?.value?.trim() || '';
+  const email = document.getElementById('notify-email')?.value?.trim() || '';
   const phone = document.getElementById('notify-phone')?.value?.trim() || '';
   const carrier = document.getElementById('notify-carrier')?.value || '';
-  savedPreferences = {notify_email: email, notify_ntfy_topic: ntfy, notify_sms_phone: phone, notify_sms_carrier: carrier};
+  savedPreferences = {notify_telegram_chat_id: telegram, notify_ntfy_topic: ntfy, notify_email: email, notify_sms_phone: phone, notify_sms_carrier: carrier};
   try {
     await fetch('/api/preferences', {
       method: 'POST',
@@ -847,7 +901,7 @@ async function sendChat() {
       const p = results[0]; // Best match
       // Check if we have saved notification preferences
       const prefs = savedPreferences;
-      if (!prefs.notify_email && !prefs.notify_ntfy_topic && !prefs.notify_sms_phone) {
+      if (!prefs.notify_telegram_chat_id && !prefs.notify_email && !prefs.notify_ntfy_topic && !prefs.notify_sms_phone) {
         addChatMsg(`Found <strong>${esc(p.name)}</strong>. Set up notification preferences in the form above first, then try again.`, false);
         selectPermit(p.id, p.name, p.location);
         return;
@@ -860,6 +914,7 @@ async function sendChat() {
         start_date: dateRange.start,
         end_date: dateRange.end,
         notify_email: prefs.notify_email || '',
+        notify_telegram_chat_id: prefs.notify_telegram_chat_id || '',
         notify_ntfy_topic: prefs.notify_ntfy_topic || '',
         notify_sms_phone: prefs.notify_sms_phone || '',
         notify_sms_carrier: prefs.notify_sms_carrier || '',

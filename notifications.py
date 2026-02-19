@@ -2,9 +2,10 @@
 Notification senders for permit availability alerts.
 
 Supports:
-  - Email via Resend API
-  - Push notifications via ntfy.sh
-  - SMS via email-to-SMS carrier gateways (sent through Resend)
+  - Telegram messages via Bot API (primary — best for non-technical users)
+  - Push notifications via ntfy.sh (secondary — free, instant)
+  - Email via Resend API (optional)
+  - SMS via email-to-SMS carrier gateways (requires verified Resend domain)
 """
 
 import json
@@ -28,6 +29,54 @@ except Exception:
 # To send real emails/SMS, set RESEND_FROM_EMAIL to an address on a verified
 # domain in your Resend account (e.g. "alerts@yourdomain.com").
 RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+
+# ---------------------------------------------------------------------------
+# Telegram Bot notification
+# ---------------------------------------------------------------------------
+
+def send_telegram(chat_id: str, permit_name: str, slots: list) -> bool:
+    """Send a permit alert via Telegram bot message."""
+    if not TELEGRAM_BOT_TOKEN or not chat_id:
+        log.warning("Telegram not configured — skipping")
+        return False
+
+    # Build a nice Telegram message with emoji
+    lines = [f"🏔️ *Permit Available: {permit_name}*", ""]
+    for s in slots[:10]:  # Limit to 10 slots in message
+        lines.append(f"📅 {s['date']} — {s['division_name']}: *{s['remaining']}/{s['total']}* spots")
+    if len(slots) > 10:
+        lines.append(f"...and {len(slots) - 10} more")
+    if slots:
+        lines.append("")
+        lines.append(f"🔗 [Book now](https://www.recreation.gov/permits/{slots[0]['permit_id']})")
+
+    text = "\n".join(lines)
+    payload = json.dumps({
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
+    }).encode()
+
+    req = Request(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+            result = json.loads(resp.read())
+            if result.get("ok"):
+                log.info("Telegram sent to chat %s", chat_id)
+                return True
+            log.error("Telegram API error: %s", result)
+            return False
+    except Exception as e:
+        log.error("Failed to send Telegram to %s: %s", chat_id, e)
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Carrier gateways for email-to-SMS
@@ -221,7 +270,14 @@ def send_test_notification(notif_type: str, **kwargs) -> dict:
     ]
 
     try:
-        if notif_type == "email":
+        if notif_type == "telegram":
+            chat_id = kwargs.get("telegram_chat_id", "")
+            if not chat_id:
+                return {"type": "telegram", "target": "", "success": False, "error": "No Telegram chat ID"}
+            ok = send_telegram(chat_id, test_permit, test_slots)
+            return {"type": "telegram", "target": chat_id, "success": ok, "error": None if ok else "Send failed (check TELEGRAM_BOT_TOKEN)"}
+
+        elif notif_type == "email":
             email = kwargs.get("email", "")
             if not email:
                 return {"type": "email", "target": "", "success": False, "error": "No email provided"}
@@ -259,6 +315,11 @@ def send_all_notifications(tracker_config: dict, permit_name: str, slots: list) 
     Returns list of result dicts.
     """
     results = []
+
+    telegram_chat_id = tracker_config.get("notify_telegram_chat_id")
+    if telegram_chat_id:
+        ok = send_telegram(telegram_chat_id, permit_name, slots)
+        results.append({"type": "telegram", "target": telegram_chat_id, "success": ok})
 
     email = tracker_config.get("notify_email")
     if email:
