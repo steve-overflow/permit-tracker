@@ -36,7 +36,10 @@ log = logging.getLogger("permit-bot")
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ACCESS_CODE = os.environ.get("ACCESS_CODE", "")
-DB_PATH = os.environ.get("DB_PATH", "tracker.db")
+# Use /data/tracker.db on Railway (persistent volume) if /data exists,
+# otherwise fall back to local ./tracker.db for development.
+_default_db = "/data/tracker.db" if os.path.isdir("/data") else "tracker.db"
+DB_PATH = os.environ.get("DB_PATH", _default_db)
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "")
 
 # ---------------------------------------------------------------------------
