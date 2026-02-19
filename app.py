@@ -12,7 +12,8 @@ import sqlite3
 from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, g, jsonify, render_template, request
+from flask import Flask, g, jsonify, redirect, render_template, request, session, url_for
+from functools import wraps
 
 from notifications import send_all_notifications
 from tracker import check_availability, get_permit_info, search_permits, find_available_slots
@@ -31,7 +32,51 @@ log = logging.getLogger("permit-tracker")
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 
+ACCESS_CODE = os.environ.get("ACCESS_CODE", "")
 DB_PATH = os.environ.get("DB_PATH", "tracker.db")
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if ACCESS_CODE and not session.get("authenticated"):
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "Unauthorized"}), 401
+            return redirect(url_for("login_page"))
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login_page():
+    if not ACCESS_CODE:
+        session["authenticated"] = True
+        return redirect("/")
+    error = None
+    if request.method == "POST":
+        code = request.form.get("access_code", "").strip()
+        if code == ACCESS_CODE:
+            session["authenticated"] = True
+            return redirect("/")
+        error = "Invalid access code"
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Permit Tracker - Login</title><link rel="stylesheet" href="/static/style.css">
+</head><body>
+<header><div class="container"><h1>Permit Tracker</h1>
+<p class="subtitle">Enter access code to continue</p></div></header>
+<main class="container"><section class="card" style="max-width:400px;margin:2rem auto;text-align:center">
+<form method="POST" action="/login">
+<input type="password" name="access_code" placeholder="Access code" 
+ style="width:100%;padding:12px;font-size:16px;border:2px solid #ddd;border-radius:8px;margin-bottom:12px"
+ autofocus>
+<button type="submit" style="width:100%;padding:12px;font-size:16px;background:#2d6a4f;color:white;border:none;border-radius:8px;cursor:pointer">Enter</button>
+{"<p style='color:#c0392b;margin-top:12px'>" + error + "</p>" if error else ""}
+</form></section></main></body></html>"""
 
 # ---------------------------------------------------------------------------
 # Database
@@ -195,6 +240,7 @@ def poll_all_trackers():
 
 
 @app.route("/")
+@login_required
 def index():
     return render_template("index.html")
 
@@ -205,6 +251,7 @@ def index():
 
 
 @app.route("/api/search")
+@login_required
 def api_search():
     """Search recreation.gov for permits."""
     q = request.args.get("q", "").strip()
@@ -219,17 +266,27 @@ def api_search():
 
 
 @app.route("/api/permits/<permit_id>")
+@login_required
 def api_permit_info(permit_id):
     """Get permit details and divisions."""
     try:
         info = get_permit_info(permit_id)
+        if not info.get("divisions"):
+            return jsonify({
+                "error": "This permit doesn't have trackable divisions yet. "
+                         "It may be a lottery-only permit or not open for the season."
+            }), 404
         return jsonify(info)
     except Exception as e:
-        log.error("Permit info failed: %s", e)
-        return jsonify({"error": str(e)}), 500
+        log.error("Permit info failed for %s: %s", permit_id, e)
+        return jsonify({
+            "error": "Couldn't load this permit from recreation.gov. "
+                     "It may not be available for tracking yet."
+        }), 502
 
 
 @app.route("/api/permits/<permit_id>/availability")
+@login_required
 def api_availability(permit_id):
     """Check availability for a permit."""
     start = request.args.get("start_date")
@@ -245,6 +302,7 @@ def api_availability(permit_id):
 
 
 @app.route("/api/trackers", methods=["GET"])
+@login_required
 def api_list_trackers():
     """List all trackers."""
     db = get_db()
@@ -259,6 +317,7 @@ def api_list_trackers():
 
 
 @app.route("/api/trackers", methods=["POST"])
+@login_required
 def api_create_tracker():
     """Create a new tracker."""
     data = request.get_json()
@@ -294,6 +353,7 @@ def api_create_tracker():
 
 
 @app.route("/api/trackers/<int:tracker_id>", methods=["DELETE"])
+@login_required
 def api_delete_tracker(tracker_id):
     """Delete a tracker and its associated data."""
     db = get_db()
@@ -305,6 +365,7 @@ def api_delete_tracker(tracker_id):
 
 
 @app.route("/api/trackers/<int:tracker_id>/toggle", methods=["POST"])
+@login_required
 def api_toggle_tracker(tracker_id):
     """Toggle a tracker active/inactive."""
     db = get_db()
@@ -318,6 +379,7 @@ def api_toggle_tracker(tracker_id):
 
 
 @app.route("/api/alerts")
+@login_required
 def api_list_alerts():
     """List recent alerts."""
     limit = request.args.get("limit", 50, type=int)
@@ -336,6 +398,7 @@ def api_list_alerts():
 
 
 @app.route("/api/trackers/<int:tracker_id>/check", methods=["POST"])
+@login_required
 def api_check_now(tracker_id):
     """Manually trigger a check for a single tracker."""
     db = get_db()
