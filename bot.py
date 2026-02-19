@@ -374,6 +374,232 @@ def handle_report(chat_id, user_id, first_name, args):
 
 
 # ---------------------------------------------------------------------------
+# Natural Language Understanding
+# ---------------------------------------------------------------------------
+
+MONTH_MAP = {
+    "jan": (1, "January"), "january": (1, "January"),
+    "feb": (2, "February"), "february": (2, "February"),
+    "mar": (3, "March"), "march": (3, "March"),
+    "apr": (4, "April"), "april": (4, "April"),
+    "may": (5, "May"),
+    "jun": (6, "June"), "june": (6, "June"),
+    "jul": (7, "July"), "july": (7, "July"),
+    "aug": (8, "August"), "august": (8, "August"),
+    "sep": (9, "September"), "september": (9, "September"),
+    "oct": (10, "October"), "october": (10, "October"),
+    "nov": (11, "November"), "november": (11, "November"),
+    "dec": (12, "December"), "december": (12, "December"),
+}
+
+TRACK_WORDS = {"alert", "notify", "track", "watch", "monitor", "tell", "let", "want", "need", "find", "looking", "any", "available", "availability", "avail", "open", "openings", "spots", "check"}
+SEARCH_WORDS = {"search", "find", "look", "what", "which", "show", "list"}
+CHECK_WORDS = {"check", "status", "how", "update"}
+STOP_WORDS = {"stop", "cancel", "remove", "delete", "disable", "turn off"}
+REPORT_WORDS = {"broken", "bug", "error", "not working", "doesn't work", "doesnt work", "issue", "problem", "wrong", "fix"}
+
+import calendar
+
+
+def parse_month_range(text, year=None):
+    """Extract month(s) from text and return (start_date, end_date)."""
+    if year is None:
+        year = datetime.now().year
+        # If month already passed, use next year
+    
+    words = text.lower().split()
+    months_found = []
+    for word in words:
+        word_clean = word.strip(".,!?")
+        if word_clean in MONTH_MAP:
+            months_found.append(MONTH_MAP[word_clean])
+    
+    if not months_found:
+        # Check for "summer", "fall", etc.
+        t = text.lower()
+        if "summer" in t:
+            months_found = [(6, "June"), (7, "July"), (8, "August")]
+        elif "fall" in t or "autumn" in t:
+            months_found = [(9, "September"), (10, "October"), (11, "November")]
+        elif "spring" in t:
+            months_found = [(4, "April"), (5, "May"), (6, "June")]
+        elif "winter" in t:
+            months_found = [(12, "December"), (1, "January"), (2, "February")]
+    
+    if not months_found:
+        # Default: next 3 months
+        now = datetime.now()
+        start = now.strftime("%Y-%m-%d")
+        end = (now + timedelta(days=90)).strftime("%Y-%m-%d")
+        return start, end, "the next 3 months"
+    
+    min_month = min(m[0] for m in months_found)
+    max_month = max(m[0] for m in months_found)
+    
+    # If month already passed this year, use next year
+    if max_month < datetime.now().month:
+        year = datetime.now().year + 1
+    elif min_month < datetime.now().month and max_month >= datetime.now().month:
+        year = datetime.now().year
+    else:
+        year = datetime.now().year
+
+    start_date = f"{year}-{min_month:02d}-01"
+    last_day = calendar.monthrange(year, max_month)[1]
+    end_date = f"{year}-{max_month:02d}-{last_day:02d}"
+    
+    month_names = sorted(set(m[1] for m in months_found))
+    desc = " - ".join(month_names) if len(month_names) > 1 else month_names[0]
+    
+    return start_date, end_date, desc
+
+
+def extract_permit_query(text):
+    """Extract the permit name/query from natural language, removing common filler words."""
+    # Remove common filler words
+    filler = {"alert", "notify", "track", "watch", "monitor", "tell", "let", "me", "to",
+              "any", "all", "permits", "permit", "available", "availability", "avail",
+              "open", "openings", "spots", "for", "in", "during", "the", "a", "an",
+              "find", "search", "looking", "want", "need", "know", "when", "if",
+              "about", "i", "my", "please", "can", "you", "check", "on", "of",
+              "show", "what", "which", "are", "is", "there", "get", "with"}
+    
+    words = text.split()
+    # Also remove month names
+    month_words = set(MONTH_MAP.keys()) | {"summer", "fall", "autumn", "spring", "winter"}
+    
+    cleaned = [w for w in words if w.lower().strip(".,!?") not in filler 
+               and w.lower().strip(".,!?") not in month_words
+               and not w.startswith("/")]
+    
+    return " ".join(cleaned).strip(".,!? ")
+
+
+def handle_natural_language(chat_id, user_id, first_name, text):
+    """Parse natural language and route to appropriate handler."""
+    lower = text.lower()
+    words = set(lower.split())
+    
+    # Check for "yes" confirmation of pending action
+    if lower.strip() in ("yes", "yeah", "yep", "y", "sure", "ok", "do it", "go ahead"):
+        pending = _get_pending(chat_id)
+        if pending and pending.get("action") == "track":
+            handle_track(chat_id, user_id, 
+                f"{pending['permit_id']} {pending['start_date']} {pending['end_date']}")
+            return
+    
+    # Check if it's a bug report
+    for phrase in REPORT_WORDS:
+        if phrase in lower:
+            handle_report(chat_id, user_id, first_name, text)
+            return
+    
+    # Check if it's about stopping/canceling
+    if words & STOP_WORDS:
+        send_message(chat_id, "To stop a tracker, use /list to find its ID, then /stop <ID>")
+        return
+    
+    # Check if it's a status check
+    if words & CHECK_WORDS and not (words & TRACK_WORDS):
+        # Could be "check my trackers" or "check availability for X"
+        query = extract_permit_query(text)
+        if query and len(query) > 2:
+            # They want to check a specific permit
+            handle_search_and_maybe_track(chat_id, user_id, query, text)
+        else:
+            handle_check(chat_id, "")
+        return
+    
+    # Check if they want to track/alert/find something
+    if words & (TRACK_WORDS | SEARCH_WORDS):
+        query = extract_permit_query(text)
+        if query and len(query) > 2:
+            handle_search_and_maybe_track(chat_id, user_id, query, text)
+            return
+    
+    # Fallback: if it looks like a permit name (2+ words, no common phrases)
+    query = extract_permit_query(text)
+    if query and len(query) > 3:
+        handle_search_and_maybe_track(chat_id, user_id, query, text)
+        return
+    
+    # True fallback
+    send_message(chat_id, 
+        "🤔 I'm not sure what you mean. Try something like:\n\n"
+        "• <i>\"alert me to maroon bells permits in august\"</i>\n"
+        "• <i>\"any half dome availability this summer?\"</i>\n"
+        "• <i>\"check my trackers\"</i>\n\n"
+        "Or use /help to see all commands."
+    )
+
+
+def handle_search_and_maybe_track(chat_id, user_id, query, original_text):
+    """Search for a permit and offer to track it."""
+    send_message(chat_id, f"🔍 Searching for: <b>{query}</b>...")
+    
+    try:
+        results = search_permits(query)
+    except Exception as e:
+        send_message(chat_id, f"❌ Search failed: {e}")
+        return
+    
+    if not results:
+        send_message(chat_id, f"No permits found for \"{query}\". Try different keywords.")
+        return
+    
+    # Parse dates from original text
+    start_date, end_date, date_desc = parse_month_range(original_text)
+    
+    if len(results) == 1:
+        # Single result — offer to track immediately
+        r = results[0]
+        send_message(chat_id,
+            f"🏕 Found: <b>{r['name']}</b>\n"
+            f"📍 {r.get('location', 'Unknown location')}\n"
+            f"📅 Dates: {date_desc} ({start_date} → {end_date})\n\n"
+            f"Shall I track this? Reply <b>yes</b> or tap:\n"
+            f"/track {r['id']} {start_date} {end_date}"
+        )
+        # Store pending action for "yes" response
+        _store_pending(chat_id, {
+            "action": "track",
+            "permit_id": r["id"],
+            "start_date": start_date,
+            "end_date": end_date,
+        })
+    else:
+        # Multiple results — show top matches
+        lines = [f"Found {len(results)} permit(s) for \"<b>{query}</b>\":\n"]
+        for i, r in enumerate(results[:5], 1):
+            loc = f" — 📍 {r['location']}" if r.get('location') else ""
+            lines.append(f"{i}. <b>{r['name']}</b>{loc}\n   /track {r['id']} {start_date} {end_date}")
+        
+        if len(results) > 5:
+            lines.append(f"\n... and {len(results) - 5} more. Try a more specific search.")
+        
+        lines.append(f"\n📅 Dates: {date_desc}")
+        lines.append("Tap a /track link above to start monitoring!")
+        send_message(chat_id, "\n".join(lines))
+
+
+# Pending actions (simple in-memory store for "yes" confirmations)
+_pending_actions = {}
+
+def _store_pending(chat_id, action):
+    _pending_actions[str(chat_id)] = {"action": action, "expires": time.time() + 120}
+
+def _get_pending(chat_id):
+    key = str(chat_id)
+    if key in _pending_actions:
+        p = _pending_actions[key]
+        if time.time() < p["expires"]:
+            del _pending_actions[key]
+            return p["action"]
+        del _pending_actions[key]
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Main polling loop
 # ---------------------------------------------------------------------------
 
@@ -425,9 +651,9 @@ def process_update(update):
         else:
             send_message(chat_id, f"Unknown command: {command}\n\nUse /help to see available commands.")
     else:
-        # Natural language - just point to /help for now
+        # Natural language processing
         if is_authorized(user_id):
-            send_message(chat_id, "💡 Use /help to see commands.\n\nExample: /search half dome")
+            handle_natural_language(chat_id, user_id, first_name, text)
         else:
             send_message(chat_id, "🔒 Please authenticate first: /start <access_code>")
 
