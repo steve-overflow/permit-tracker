@@ -929,8 +929,8 @@ details.notif-card[open] .chevron { transform: rotate(90deg); }
 }
 .section-header h2 { margin-bottom: 0; }
 
-/* Mike test button */
-.btn-mike {
+/* Daily check-in button */
+.btn-checkin {
   background: var(--bg-inset);
   color: var(--text-secondary);
   border: 1px solid var(--border);
@@ -942,11 +942,11 @@ details.notif-card[open] .chevron { transform: rotate(90deg); }
   transition: all var(--dur) var(--ease);
   font-family: var(--font);
 }
-.btn-mike:hover:not(:disabled) {
+.btn-checkin:hover:not(:disabled) {
   background: var(--bg-hover);
   border-color: var(--border-strong);
 }
-.btn-mike:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-checkin:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* Config actions */
 .config-actions {

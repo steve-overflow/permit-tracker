@@ -142,26 +142,22 @@ def handle_chatid(chat_id):
 
 
 def handle_test(chat_id):
-    """Trigger a mike test — heartbeat notification to all configured channels."""
-    send_message(chat_id, "🎤 Running mike test...")
+    """Trigger a daily check-in — real status report to all configured channels."""
+    send_message(chat_id, "📊 Running daily check-in...")
     try:
-        # Import and run the mike test from app
-        import importlib
-        import sys
-        # Direct approach: call the function
-        from app import send_mike_test
-        results = send_mike_test()
+        from app import send_daily_checkin
+        results = send_daily_checkin()
         if not results:
             send_message(chat_id, "⚠️ No notification channels configured yet. Set up notifications in the web app first!")
             return
-        lines = ["🎤 <b>Mike Test Results:</b>", ""]
+        lines = ["📊 <b>Daily Check-in Sent:</b>", ""]
         for r in results:
             icon = "✅" if r.get("success") else "❌"
             lines.append(f"{icon} {r['type']} → {r.get('target', '?')}")
         send_message(chat_id, "\n".join(lines))
     except Exception as e:
-        log.error("Mike test from Telegram failed: %s", e)
-        send_message(chat_id, f"❌ Mike test failed: {e}")
+        log.error("Daily check-in from Telegram failed: %s", e)
+        send_message(chat_id, f"❌ Daily check-in failed: {e}")
 
 
 def handle_help(chat_id):
@@ -180,7 +176,7 @@ I'll search, show numbered results, and you pick which to track!
 /check &lt;tracker_id&gt; — Run immediate check
 /checkall — Check all trackers now
 /stop &lt;tracker_id&gt; — Stop tracking
-/test — 🎤 Mike test (send heartbeat to all notification channels)
+/test — 📊 Daily check-in (send status report to all channels)
 /chatid — Show your Chat ID (for web app notifications)
 /report &lt;issue&gt; — Report a bug or request a feature
 /help — Show this message""")

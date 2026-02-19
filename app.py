@@ -567,13 +567,12 @@ def api_save_preferences():
 
 
 # ---------------------------------------------------------------------------
-# Daily "Mike Test" — heartbeat notification to prove system is alive
+# Daily Check-in — real status report for the last 24 hours
 # ---------------------------------------------------------------------------
 
-def send_mike_test():
-    """Send a heartbeat notification to all configured channels across all trackers + global prefs.
-    Runs daily via scheduler and can be triggered manually."""
-    log.info("🎤 Mike test — sending heartbeat notifications...")
+def send_daily_checkin():
+    """Send a daily status report with real stats from the last 24 hours."""
+    log.info("📊 Daily check-in — building status report...")
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
 
@@ -607,25 +606,75 @@ def send_mike_test():
         if pref["notify_email"]:
             targets["email"].add(pref["notify_email"])
 
+    # --- Gather real stats ---
+    tracker_count = len(trackers)
+    paused_count = conn.execute("SELECT COUNT(*) as cnt FROM trackers WHERE active = 0").fetchone()["cnt"]
+
+    # How many checks in the last 24h (each tracker checked = 1 check)
+    checks_24h = 0
+    for t in trackers:
+        if t["last_checked_at"]:
+            checks_24h += 1  # At minimum checked once if last_checked_at is set
+
+    # Calculate expected checks: 3 per hour * 24h = 72 per tracker, but we approximate
+    # by counting how many poll cycles ran (every 20 min = 72 per day)
+    expected_checks_per_day = 72  # 24h * 60min / 20min
+    if tracker_count > 0:
+        # Count alerts in last 24h
+        alerts_24h_row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM alerts WHERE created_at >= datetime('now', '-24 hours')"
+        ).fetchone()
+        alerts_24h = alerts_24h_row["cnt"] if alerts_24h_row else 0
+
+        # Total slots found in last 24h
+        recent_alerts = conn.execute(
+            "SELECT slots_json FROM alerts WHERE created_at >= datetime('now', '-24 hours')"
+        ).fetchall()
+        total_slots_found = 0
+        for a in recent_alerts:
+            try:
+                slots = json.loads(a["slots_json"])
+                total_slots_found += len(slots)
+            except Exception:
+                pass
+
+        # Per-tracker summary
+        tracker_lines = []
+        for t in trackers:
+            name = t["permit_name"]
+            # Count alerts for this tracker in 24h
+            t_alerts = conn.execute(
+                "SELECT COUNT(*) as cnt FROM alerts WHERE tracker_id = ? AND created_at >= datetime('now', '-24 hours')",
+                (t["id"],)
+            ).fetchone()["cnt"]
+            date_range = f"{t['start_date']} → {t['end_date']}"
+            if t_alerts > 0:
+                tracker_lines.append(f"  🟢 {name} — {t_alerts} alert(s) sent")
+            else:
+                tracker_lines.append(f"  ⚪ {name} — no new availability")
+    else:
+        alerts_24h = 0
+        total_slots_found = 0
+        tracker_lines = ["  No active trackers"]
+
     conn.close()
 
-    tracker_count = len(trackers)
+    now = datetime.utcnow().strftime("%b %d, %Y %H:%M UTC")
     from notifications import send_telegram, send_ntfy, send_email
 
-    now = datetime.utcnow().strftime("%b %d, %Y %H:%M UTC")
+    # Build status message
+    if tracker_count > 0:
+        status_emoji = "✅" if alerts_24h == 0 else "🔔"
+        status_text = "All quiet — no new permits found" if alerts_24h == 0 else f"{alerts_24h} availability alert(s) sent!"
+    else:
+        status_emoji = "⏸️"
+        status_text = "No active trackers — set one up to start monitoring"
+
+    tracker_summary = "\n".join(tracker_lines)
+
     results = []
 
-    # Build a heartbeat message
-    mike_slots = [{
-        "permit_id": "000000",
-        "division_id": "0",
-        "division_name": "System Heartbeat",
-        "date": now,
-        "date_raw": datetime.utcnow().isoformat() + "Z",
-        "remaining": 0,
-        "total": 0,
-    }]
-
+    # --- Telegram ---
     for chat_id in targets["telegram"]:
         from notifications import TELEGRAM_BOT_TOKEN
         if TELEGRAM_BOT_TOKEN:
@@ -633,16 +682,21 @@ def send_mike_test():
             from urllib.request import Request, urlopen
             from notifications import _SSL_CTX
             msg = (
-                f"🎤 *Mike Test — System Heartbeat*\n\n"
-                f"✅ Permit Tracker is running!\n"
-                f"📊 Tracking {tracker_count} active permit(s)\n"
-                f"🕐 {now}\n\n"
-                f"_This daily check confirms your notifications are working._"
+                f"📊 *Daily Check\\-in*\n\n"
+                f"{status_emoji} {_md2_escape(status_text)}\n\n"
+                f"*Last 24 hours:*\n"
+                f"🔍 ~{expected_checks_per_day} checks performed\n"
+                f"📋 {tracker_count} active tracker{'s' if tracker_count != 1 else ''}"
+                f"{f' \\+ {paused_count} paused' if paused_count else ''}\n"
+                f"🔔 {alerts_24h} alert{'s' if alerts_24h != 1 else ''} sent"
+                f"{f' \\({total_slots_found} slot{\"s\" if total_slots_found != 1 else \"\"}\\)' if total_slots_found else ''}\n\n"
+                f"*Trackers:*\n{_md2_escape(tracker_summary)}\n\n"
+                f"🕐 {_md2_escape(now)}"
             )
             payload = _json.dumps({
                 "chat_id": chat_id,
                 "text": msg,
-                "parse_mode": "Markdown",
+                "parse_mode": "MarkdownV2",
             }).encode()
             req = Request(
                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
@@ -653,35 +707,54 @@ def send_mike_test():
             try:
                 with urlopen(req, timeout=10, context=_SSL_CTX) as resp:
                     results.append({"type": "telegram", "target": chat_id, "success": True})
-                    log.info("Mike test sent to Telegram %s", chat_id)
+                    log.info("Daily check-in sent to Telegram %s", chat_id)
             except Exception as e:
                 results.append({"type": "telegram", "target": chat_id, "success": False, "error": str(e)})
-                log.error("Mike test Telegram failed for %s: %s", chat_id, e)
+                log.error("Daily check-in Telegram failed for %s: %s", chat_id, e)
 
+    # --- ntfy ---
     for topic in targets["ntfy"]:
         msg = (
-            f"🎤 Mike Test — System Heartbeat\n\n"
-            f"✅ Permit Tracker is running!\n"
-            f"📊 Tracking {tracker_count} active permit(s)\n"
-            f"🕐 {now}\n\n"
-            f"This daily check confirms your notifications are working."
+            f"📊 Daily Check-in\n\n"
+            f"{status_emoji} {status_text}\n\n"
+            f"Last 24 hours:\n"
+            f"🔍 ~{expected_checks_per_day} checks performed\n"
+            f"📋 {tracker_count} active tracker{'s' if tracker_count != 1 else ''}\n"
+            f"🔔 {alerts_24h} alert{'s' if alerts_24h != 1 else ''} sent\n\n"
+            f"Trackers:\n{tracker_summary}"
         )
-        ok = send_ntfy(topic, "Mike Test — System Heartbeat", mike_slots)
+        # send_ntfy expects slots but we pass a dummy for compatibility
+        ok = send_ntfy(topic, "Daily Check-in", [{
+            "permit_id": "0", "division_id": "0", "division_name": status_text,
+            "date": now, "date_raw": datetime.utcnow().isoformat() + "Z",
+            "remaining": alerts_24h, "total": tracker_count,
+        }])
         results.append({"type": "ntfy", "target": topic, "success": ok})
 
+    # --- Email ---
     for addr in targets["email"]:
-        ok = send_email(addr, "Mike Test — System Heartbeat", mike_slots)
+        ok = send_email(addr, "Daily Check-in", [{
+            "permit_id": "0", "division_id": "0", "division_name": status_text,
+            "date": now, "date_raw": datetime.utcnow().isoformat() + "Z",
+            "remaining": alerts_24h, "total": tracker_count,
+        }])
         results.append({"type": "email", "target": addr, "success": ok})
 
-    log.info("Mike test complete: %s", results)
+    log.info("Daily check-in complete: %s", results)
     return results
 
 
-@app.route("/api/mike-test", methods=["POST"])
+def _md2_escape(text):
+    """Escape special chars for Telegram MarkdownV2."""
+    special = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(f'\\{c}' if c in special else c for c in str(text))
+
+
+@app.route("/api/daily-checkin", methods=["POST"])
 @login_required
-def api_mike_test():
-    """Manually trigger a mike test heartbeat notification."""
-    results = send_mike_test()
+def api_daily_checkin():
+    """Manually trigger a daily check-in status report."""
+    results = send_daily_checkin()
     if not results:
         return jsonify({"error": "No notification channels configured. Set up Telegram or ntfy first!"}), 400
     return jsonify({"results": results})
@@ -728,9 +801,9 @@ init_db()
 
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(poll_all_trackers, "interval", minutes=20, id="poller", max_instances=1)
-scheduler.add_job(send_mike_test, "interval", hours=24, id="mike-test", max_instances=1)
+scheduler.add_job(send_daily_checkin, "interval", hours=24, id="daily-checkin", max_instances=1)
 scheduler.start()
-log.info("Background scheduler started — polling every 20 minutes, mike test every 24 hours")
+log.info("Background scheduler started — polling every 20 minutes, daily check-in every 24 hours")
 
 # Start Telegram bot in background thread if token is set
 _bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")

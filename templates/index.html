@@ -153,11 +153,11 @@
   <section class="section" id="trackers-section">
     <div class="section-header">
       <h2 style="margin-bottom:0">Active Trackers</h2>
-      <button class="btn-mike" id="mike-test-btn" onclick="runMikeTest(this)" title="Send a test notification to all configured channels">
-        Mike Test
+      <button class="btn-checkin" id="checkin-btn" onclick="runDailyCheckin(this)" title="Send a test notification to all configured channels">
+        Daily Check-in
       </button>
     </div>
-    <div id="mike-test-result" class="test-result hidden"></div>
+    <div id="checkin-result" class="test-result hidden"></div>
     <div id="trackers-list">
       <div class="empty-state">
         <span class="empty-state-icon" aria-hidden="true">&#127956;</span>
@@ -713,29 +713,29 @@ async function testNotification(type) {
   }
 }
 
-async function runMikeTest(btn) {
+async function runDailyCheckin(btn) {
   btn.disabled = true;
   btn.textContent = 'Sending...';
-  const resultEl = document.getElementById('mike-test-result');
+  const resultEl = document.getElementById('checkin-result');
   try {
-    const resp = await fetch('/api/mike-test', { method: 'POST' });
+    const resp = await fetch('/api/daily-checkin', { method: 'POST' });
     const data = await resp.json();
     if (data.error) {
-      showToast('error', 'Mike test failed', data.error);
+      showToast('error', 'Check-in failed', data.error);
     } else {
       const ok = data.results.filter(r => r.success).length;
       const fail = data.results.filter(r => !r.success).length;
       if (fail === 0) {
-        showToast('success', 'Mike test sent', `${ok} notification(s) delivered.`);
+        showToast('success', 'Check-in sent', `${ok} notification(s) delivered.`);
       } else {
         showToast('error', 'Partial failure', `${ok} sent, ${fail} failed.`);
       }
     }
   } catch (err) {
-    showToast('error', 'Mike test failed', err.message);
+    showToast('error', 'Check-in failed', err.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Mike Test';
+    btn.textContent = 'Daily Check-in';
   }
 }
 
