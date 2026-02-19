@@ -115,10 +115,26 @@ def authorize_user(user_id):
 # Command handlers
 # ---------------------------------------------------------------------------
 
-def _save_chat_id_to_prefs(chat_id):
-    """Save the user's Telegram chat_id to user_preferences so web UI auto-detects it."""
+def _save_chat_id_to_prefs(chat_id, user_id=None, first_name="Unknown"):
+    """Save the user to the users table so web UI can identify them."""
     try:
         conn = sqlite3.connect(DB_PATH)
+        # Ensure users table exists (migration safety)
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_chat_id TEXT NOT NULL UNIQUE,
+                telegram_user_id TEXT DEFAULT '',
+                first_name TEXT NOT NULL DEFAULT 'Unknown',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )"""
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO users (telegram_chat_id, telegram_user_id, first_name) "
+            "VALUES (?, ?, ?)",
+            (str(chat_id), str(user_id or ""), first_name),
+        )
+        # Also keep legacy user_preferences updated
         conn.execute(
             "INSERT OR REPLACE INTO user_preferences (id, notify_telegram_chat_id, updated_at) "
             "VALUES ((SELECT id FROM user_preferences ORDER BY id DESC LIMIT 1), ?, datetime('now'))",
@@ -126,20 +142,20 @@ def _save_chat_id_to_prefs(chat_id):
         )
         conn.commit()
         conn.close()
-        log.info("Saved chat_id %s to user_preferences", chat_id)
+        log.info("Saved user %s (chat_id %s) to users table", first_name, chat_id)
     except Exception as e:
-        log.error("Failed to save chat_id to prefs: %s", e)
+        log.error("Failed to save user: %s", e)
 
 
 def handle_start(chat_id, user_id, args, first_name):
     if not ACCESS_CODE:
         authorize_user(user_id)
-        _save_chat_id_to_prefs(chat_id)
+        _save_chat_id_to_prefs(chat_id, user_id, first_name)
         send_message(chat_id, f"👋 Welcome {first_name}! No access code required.\n\nUse /help to see commands.")
         return
 
     if is_authorized(user_id):
-        _save_chat_id_to_prefs(chat_id)
+        _save_chat_id_to_prefs(chat_id, user_id, first_name)
         send_message(chat_id, f"👋 Welcome back {first_name}! You're already verified.\n\n✅ Connected via Telegram\n\nUse /help to see commands.")
         return
 
@@ -149,7 +165,7 @@ def handle_start(chat_id, user_id, args, first_name):
 
     if args.strip() == ACCESS_CODE:
         authorize_user(user_id)
-        _save_chat_id_to_prefs(chat_id)
+        _save_chat_id_to_prefs(chat_id, user_id, first_name)
         send_message(chat_id, f"✅ Access granted! Welcome {first_name}.\n\n✅ Connected via Telegram — you'll get notifications here.\n\nUse /help to see what I can do.")
     else:
         send_message(chat_id, "❌ Invalid access code. Try again with /start <code>")

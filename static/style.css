@@ -1234,3 +1234,20 @@ footer p { margin: 0; }
 .slot-date { color: var(--muted); }
 .slot-count { font-weight: 600; }
 .slot-count.available { color: var(--green); }
+
+/* User badge in header */
+.user-badge {
+  display: inline-block;
+  background: rgba(255,255,255,0.15);
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 13px;
+  margin-left: 12px;
+  vertical-align: middle;
+}
+.header-inner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}

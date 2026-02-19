@@ -68,13 +68,13 @@ def login_required(f):
 def login_page():
     if not ACCESS_CODE:
         session["authenticated"] = True
-        return redirect("/")
+        return redirect("/pick-user")
     error = None
     if request.method == "POST":
         code = request.form.get("access_code", "").strip()
         if code == ACCESS_CODE:
             session["authenticated"] = True
-            return redirect("/")
+            return redirect("/pick-user")
         error = "Invalid access code"
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
@@ -90,6 +90,82 @@ def login_page():
 <button type="submit" style="width:100%;padding:12px;font-size:16px;background:#2d6a4f;color:white;border:none;border-radius:8px;cursor:pointer">Enter</button>
 {"<p style='color:#c0392b;margin-top:12px'>" + error + "</p>" if error else ""}
 </form></section></main></body></html>"""
+
+
+@app.route("/pick-user", methods=["GET", "POST"])
+@login_required
+def pick_user_page():
+    # If user already picked, go to home
+    if session.get("user_chat_id"):
+        return redirect("/")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    users = conn.execute("SELECT * FROM users ORDER BY first_name").fetchall()
+    conn.close()
+
+    if request.method == "POST":
+        chat_id = request.form.get("chat_id", "").strip()
+        if chat_id:
+            session["user_chat_id"] = chat_id
+            # Find the user's name for the session
+            for u in users:
+                if u["telegram_chat_id"] == chat_id:
+                    session["user_name"] = u["first_name"]
+                    break
+            return redirect("/")
+
+    if not users:
+        return """<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Permit Tracker - Connect</title><link rel="stylesheet" href="/static/style.css">
+</head><body>
+<header><div class="container"><h1>Permit Tracker</h1>
+<p class="subtitle">Connect your Telegram first</p></div></header>
+<main class="container"><section class="card" style="max-width:440px;margin:2rem auto;text-align:center">
+<p style="font-size:48px;margin:0">📱</p>
+<h2 style="margin:12px 0">Connect Telegram</h2>
+<p>Open <a href="https://t.me/Permit_tracker_bot" target="_blank" style="color:#2d6a4f;font-weight:bold">@Permit_tracker_bot</a> in Telegram and send:</p>
+<code style="display:block;background:#f0f0f0;padding:12px;border-radius:8px;font-size:18px;margin:12px 0">/start """ + ACCESS_CODE + """</code>
+<p>Then come back here and refresh this page.</p>
+<br>
+<a href="/pick-user" style="display:inline-block;padding:12px 24px;background:#2d6a4f;color:white;border-radius:8px;text-decoration:none">Refresh</a>
+</section></main></body></html>"""
+
+    user_buttons = ""
+    for u in users:
+        user_buttons += f'''
+        <button type="submit" name="chat_id" value="{u["telegram_chat_id"]}"
+          style="width:100%;padding:16px;font-size:18px;background:#2d6a4f;color:white;border:none;border-radius:8px;cursor:pointer;margin-bottom:8px">
+          👋 I'm {u["first_name"]}
+        </button>'''
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Permit Tracker - Who are you?</title><link rel="stylesheet" href="/static/style.css">
+</head><body>
+<header><div class="container"><h1>Permit Tracker</h1>
+<p class="subtitle">Who are you?</p></div></header>
+<main class="container"><section class="card" style="max-width:440px;margin:2rem auto;text-align:center">
+<p style="font-size:48px;margin:0">🏕</p>
+<h2 style="margin:12px 0">Welcome!</h2>
+<p>Pick your name to see your trackers and get notifications:</p>
+<form method="POST" action="/pick-user" style="margin-top:16px">
+{user_buttons}
+</form>
+<hr style="margin:20px 0;border:none;border-top:1px solid #ddd">
+<p style="font-size:14px;color:#666">Don't see your name? Open <a href="https://t.me/Permit_tracker_bot" target="_blank" style="color:#2d6a4f">@Permit_tracker_bot</a> and send <code>/start {ACCESS_CODE}</code> first, then refresh.</p>
+<a href="/pick-user" style="font-size:14px;color:#2d6a4f">Refresh</a>
+</section></main></body></html>"""
+
+
+@app.route("/switch-user")
+@login_required
+def switch_user():
+    """Let user switch identity."""
+    session.pop("user_chat_id", None)
+    session.pop("user_name", None)
+    return redirect("/pick-user")
 
 # ---------------------------------------------------------------------------
 # Database
@@ -151,6 +227,14 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             notify_telegram_chat_id TEXT DEFAULT '',
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_chat_id TEXT NOT NULL UNIQUE,
+            telegram_user_id TEXT DEFAULT '',
+            first_name TEXT NOT NULL DEFAULT 'Unknown',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         """
     )
@@ -263,7 +347,11 @@ def poll_all_trackers():
 @app.route("/")
 @login_required
 def index():
-    return render_template("index.html")
+    if not session.get("user_chat_id"):
+        return redirect("/pick-user")
+    return render_template("index.html",
+                           user_name=session.get("user_name", ""),
+                           user_chat_id=session.get("user_chat_id", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -322,13 +410,24 @@ def api_availability(permit_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/users")
+@login_required
+def api_list_users():
+    """List connected Telegram users."""
+    db = get_db()
+    rows = db.execute("SELECT telegram_chat_id, first_name FROM users ORDER BY first_name").fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
 @app.route("/api/trackers", methods=["GET"])
 @login_required
 def api_list_trackers():
-    """List all trackers with alert counts."""
+    """List trackers for the current user."""
     db = get_db()
+    user_chat_id = session.get("user_chat_id", "")
     rows = db.execute(
-        "SELECT * FROM trackers ORDER BY created_at DESC"
+        "SELECT * FROM trackers WHERE notify_telegram_chat_id = ? ORDER BY created_at DESC",
+        (user_chat_id,)
     ).fetchall()
     trackers = [dict(r) for r in rows]
     for t in trackers:
@@ -355,6 +454,9 @@ def api_create_tracker():
         if not data.get(field):
             return jsonify({"error": f"Missing required field: {field}"}), 400
 
+    # Always use the session user's chat_id
+    user_chat_id = session.get("user_chat_id", data.get("notify_telegram_chat_id", ""))
+
     db = get_db()
     cursor = db.execute(
         """INSERT INTO trackers
@@ -367,7 +469,7 @@ def api_create_tracker():
             json.dumps(data.get("division_ids", [])),
             data["start_date"],
             data["end_date"],
-            data.get("notify_telegram_chat_id", ""),
+            user_chat_id,
         ),
     )
     db.commit()
@@ -406,9 +508,14 @@ def api_toggle_tracker(tracker_id):
 def api_list_alerts():
     """List recent alerts."""
     limit = request.args.get("limit", 50, type=int)
+    user_chat_id = session.get("user_chat_id", "")
     db = get_db()
     rows = db.execute(
-        "SELECT * FROM alerts ORDER BY created_at DESC LIMIT ?", (limit,)
+        """SELECT a.* FROM alerts a
+           JOIN trackers t ON a.tracker_id = t.id
+           WHERE t.notify_telegram_chat_id = ?
+           ORDER BY a.created_at DESC LIMIT ?""",
+        (user_chat_id, limit)
     ).fetchall()
     alerts = []
     for r in rows:
@@ -489,33 +596,20 @@ def api_check_now(tracker_id):
 @app.route("/api/preferences", methods=["GET"])
 @login_required
 def api_get_preferences():
-    """Get saved notification preferences."""
-    db = get_db()
-    row = db.execute("SELECT * FROM user_preferences ORDER BY id DESC LIMIT 1").fetchone()
-    if row:
-        chat_id = row["notify_telegram_chat_id"] if "notify_telegram_chat_id" in row.keys() else ""
-        prefs = {
-            "notify_telegram_chat_id": chat_id,
-            "setup_complete": bool(chat_id),
-        }
-        return jsonify(prefs)
-    return jsonify({"setup_complete": False})
+    """Get preferences for current user (based on session)."""
+    user_chat_id = session.get("user_chat_id", "")
+    user_name = session.get("user_name", "")
+    return jsonify({
+        "notify_telegram_chat_id": user_chat_id,
+        "setup_complete": bool(user_chat_id),
+        "user_name": user_name,
+    })
 
 
 @app.route("/api/preferences", methods=["POST"])
 @login_required
 def api_save_preferences():
-    """Save notification preferences."""
-    data = request.get_json()
-    db = get_db()
-    # Upsert — delete old, insert new
-    db.execute("DELETE FROM user_preferences")
-    db.execute(
-        """INSERT INTO user_preferences (notify_telegram_chat_id)
-           VALUES (?)""",
-        (data.get("notify_telegram_chat_id", ""),)
-    )
-    db.commit()
+    """No-op — preferences are now derived from user identity."""
     return jsonify({"ok": True})
 
 
