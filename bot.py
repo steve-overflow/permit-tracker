@@ -26,6 +26,7 @@ from urllib.request import Request, urlopen
 import re
 
 from tracker import get_permit_info, search_permits, check_availability, find_available_slots, _SSL_CTX
+from ai_chat import parse_with_ai
 
 logging.basicConfig(
     level=logging.INFO,
@@ -531,19 +532,175 @@ def extract_permit_query(text):
     return " ".join(cleaned).strip(".,!? ")
 
 
+def _build_ai_context(chat_id):
+    """Build context string for AI about current conversation state."""
+    state = _get_conv_state(chat_id)
+    if not state:
+        return ""
+
+    phase = state.get("phase", "search")
+    results = state.get("results", [])
+
+    if phase == "divisions":
+        divs = state.get("divisions", [])
+        permit = state.get("current_permit", {})
+        div_list = "\n".join(f"  {i+1}. {d.get('name', f'Division {d[\"id\"]}')}" for i, d in enumerate(divs))
+        return (
+            f"User is selecting divisions/sites for: {permit.get('name', 'unknown')}\n"
+            f"Available divisions:\n{div_list}\n"
+            f"They should pick numbers, 'all', or 'skip'."
+        )
+    elif phase == "search" and results:
+        result_list = "\n".join(
+            f"  {i+1}. {r['name']} (ID: {r['id']})" for i, r in enumerate(results)
+        )
+        return (
+            f"User has pending search results (pick numbers, 'all', or 'cancel'):\n{result_list}\n"
+            f"Date range: {state['date_range']['start']} to {state['date_range']['end']}"
+        )
+    return ""
+
+
 def handle_natural_language(chat_id, user_id, first_name, text):
-    """Parse natural language and route to appropriate handler."""
+    """Use Claude Opus to understand intent and route to appropriate handler."""
+    
+    # Build context for AI
+    context = _build_ai_context(chat_id)
+    
+    # Call AI
+    parsed = parse_with_ai(text, context)
+    
+    if not parsed:
+        # AI failed — fall back to basic keyword parsing
+        _handle_natural_language_fallback(chat_id, user_id, first_name, text)
+        return
+
+    intent = parsed.get("intent", "")
+    log.info("AI intent for chat %s: %s", chat_id, intent)
+
+    # === Route by intent ===
+    
+    if intent == "search":
+        query = parsed.get("query", "")
+        if not query or len(query) < 2:
+            send_message(chat_id, "What permit are you looking for? Give me a name or location.")
+            return
+        # Build date text from AI-extracted months/season
+        date_text = text  # Pass original for month extraction
+        months = parsed.get("months")
+        season = parsed.get("season")
+        if months:
+            date_text = query + " " + " ".join(months)
+        elif season:
+            date_text = query + " " + season
+        handle_search_and_maybe_track(chat_id, user_id, query, date_text)
+
+    elif intent == "track":
+        state = _get_conv_state(chat_id)
+        if not state:
+            send_message(chat_id, "Search for a permit first, then I'll help you set up tracking!")
+            return
+        selection = parsed.get("selection", "cancel")
+        if selection == "cancel":
+            _clear_conv_state(chat_id)
+            send_message(chat_id, "👍 Cancelled. Send me a new search anytime!")
+        elif selection == "all":
+            handle_selection(chat_id, user_id, "all")
+        elif isinstance(selection, list):
+            handle_selection(chat_id, user_id, " ".join(str(n) for n in selection))
+        else:
+            handle_selection(chat_id, user_id, str(selection))
+
+    elif intent == "show_details":
+        num = parsed.get("number", 1)
+        handle_selection(chat_id, user_id, f"show {num}")
+
+    elif intent == "division_select":
+        state = _get_conv_state(chat_id)
+        if not state or state.get("phase") != "divisions":
+            send_message(chat_id, "No division selection pending. Search for a permit first!")
+            return
+        selection = parsed.get("selection", "skip")
+        if selection == "skip":
+            handle_selection(chat_id, user_id, "skip")
+        elif selection == "all":
+            handle_selection(chat_id, user_id, "all")
+        elif isinstance(selection, list):
+            handle_selection(chat_id, user_id, " ".join(str(n) for n in selection))
+        else:
+            handle_selection(chat_id, user_id, str(selection))
+
+    elif intent == "confirm":
+        if parsed.get("value"):
+            # Check if there's a pending state
+            state = _get_conv_state(chat_id)
+            if state:
+                handle_selection(chat_id, user_id, "all")
+            else:
+                pending = _get_pending(chat_id)
+                if pending and pending.get("action") == "track":
+                    handle_track(chat_id, user_id,
+                        f"{pending['permit_id']} {pending['start_date']} {pending['end_date']}")
+                else:
+                    send_message(chat_id, "Nothing pending to confirm. Search for a permit to get started!")
+        else:
+            _clear_conv_state(chat_id)
+            send_message(chat_id, "👍 No problem. Send me a new search anytime!")
+
+    elif intent == "list_trackers":
+        handle_list(chat_id, user_id)
+
+    elif intent == "check_now":
+        tracker_id = parsed.get("tracker_id")
+        handle_check(chat_id, str(tracker_id) if tracker_id else "")
+
+    elif intent == "stop_tracker":
+        tracker_id = parsed.get("tracker_id")
+        if tracker_id:
+            handle_stop(chat_id, str(tracker_id))
+        else:
+            send_message(chat_id, "Which tracker do you want to stop? Use /list to see your trackers and their IDs.")
+
+    elif intent == "help":
+        handle_help(chat_id)
+
+    elif intent == "report_bug":
+        msg = parsed.get("message", text)
+        handle_report(chat_id, user_id, first_name, msg)
+
+    elif intent == "question":
+        answer = parsed.get("answer", "")
+        if answer:
+            send_message(chat_id, answer)
+        else:
+            send_message(chat_id, "I'm not sure about that. Try /help to see what I can do!")
+
+    elif intent == "greeting":
+        send_message(chat_id,
+            f"Hey {first_name}! 👋 I'm your permit tracker bot.\n\n"
+            f"Tell me what permit you're looking for — like <i>\"Maroon Bells in August\"</i> "
+            f"or <i>\"river permits in Colorado\"</i> — and I'll find availability for you!")
+
+    else:
+        # Unknown intent from AI
+        send_message(chat_id,
+            "🤔 I'm not sure what you mean. Try something like:\n\n"
+            "• <i>\"river permits in Colorado for August\"</i>\n"
+            "• <i>\"any half dome availability this summer?\"</i>\n"
+            "• <i>\"check my trackers\"</i>\n\n"
+            "Or use /help to see all commands."
+        )
+
+
+def _handle_natural_language_fallback(chat_id, user_id, first_name, text):
+    """Fallback keyword-based NLU when AI is unavailable."""
     lower = text.lower()
     words = set(lower.split())
 
-    # Check if user is responding to a pending selection (numbered results)
     if _get_conv_state(chat_id):
         if handle_selection(chat_id, user_id, text):
             return
-        # If parse_selection returned None, it's not a selection — fall through
-        # to treat as a new search (which will clear the old state)
 
-    # Check for "yes" confirmation of pending action (legacy single-result flow)
     if lower.strip() in ("yes", "yeah", "yep", "y", "sure", "ok", "do it", "go ahead"):
         pending = _get_pending(chat_id)
         if pending and pending.get("action") == "track":
@@ -551,42 +708,34 @@ def handle_natural_language(chat_id, user_id, first_name, text):
                 f"{pending['permit_id']} {pending['start_date']} {pending['end_date']}")
             return
 
-    # Check if it's a bug report
     for phrase in REPORT_WORDS:
         if phrase in lower:
             handle_report(chat_id, user_id, first_name, text)
             return
 
-    # Check if it's about stopping/canceling
     if words & STOP_WORDS:
         send_message(chat_id, "To stop a tracker, use /list to find its ID, then /stop <ID>")
         return
 
-    # Check if it's a status check
     if words & CHECK_WORDS and not (words & TRACK_WORDS):
-        # Could be "check my trackers" or "check availability for X"
         query = extract_permit_query(text)
         if query and len(query) > 2:
-            # They want to check a specific permit
             handle_search_and_maybe_track(chat_id, user_id, query, text)
         else:
             handle_check(chat_id, "")
         return
 
-    # Check if they want to track/alert/find something
     if words & (TRACK_WORDS | SEARCH_WORDS):
         query = extract_permit_query(text)
         if query and len(query) > 2:
             handle_search_and_maybe_track(chat_id, user_id, query, text)
             return
 
-    # Fallback: if it looks like a permit name (2+ words, no common phrases)
     query = extract_permit_query(text)
     if query and len(query) > 3:
         handle_search_and_maybe_track(chat_id, user_id, query, text)
         return
 
-    # True fallback
     send_message(chat_id,
         "🤔 I'm not sure what you mean. Try something like:\n\n"
         "• <i>\"river permits in Colorado for August\"</i>\n"
