@@ -82,19 +82,47 @@ def search_permits(query: str) -> list:
 
 
 def get_permit_info(permit_id: str) -> dict:
-    """Get permit metadata including division names."""
-    data = api_get(f"/permits/{permit_id}")
-    payload = data.get("payload", {})
+    """Get permit metadata including division names.
+    
+    Tries the standard /permits/ endpoint first, then falls back to
+    /permitcontent/ for newer permit types (wilderness permits, etc).
+    """
     divisions = {}
-    for div_id, div in payload.get("divisions", {}).items():
-        divisions[div_id] = {
-            "id": div_id,
-            "name": div.get("name", "Unknown"),
-            "type": div.get("type", "Unknown"),
-        }
+    name = "Unknown"
+
+    # Try standard endpoint first
+    try:
+        data = api_get(f"/permits/{permit_id}")
+        payload = data.get("payload", {})
+        if "error" not in data:
+            for div_id, div in payload.get("divisions", {}).items():
+                divisions[div_id] = {
+                    "id": div_id,
+                    "name": div.get("name", "Unknown"),
+                    "type": div.get("type", "Unknown"),
+                }
+            name = payload.get("facility_name", payload.get("name", "Unknown"))
+    except Exception:
+        pass
+
+    # Fall back to permitcontent endpoint for newer permits
+    if not divisions:
+        try:
+            data = api_get(f"/permitcontent/{permit_id}")
+            payload = data.get("payload", {})
+            for div_id, div in payload.get("divisions", {}).items():
+                divisions[div_id] = {
+                    "id": div_id,
+                    "name": div.get("name", "Unknown"),
+                    "type": div.get("type", "Unknown"),
+                }
+            name = payload.get("name", name)
+        except Exception:
+            pass
+
     return {
         "permit_id": permit_id,
-        "name": payload.get("facility_name", payload.get("name", "Unknown")),
+        "name": name,
         "divisions": divisions,
     }
 
